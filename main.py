@@ -17,11 +17,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def send_telegram_message(text: str):
-    from src.telegram_bot.bot import create_bot
-    from src.config import settings
-    pass
-
 
 def run_bot():
     from src.config import settings
@@ -48,10 +43,13 @@ def run_bot():
 
     set_send_message_func(send_to_chat)
 
-    scheduler.start()
-    logger.info("Scheduler started (every %d minutes)", settings.check_interval_minutes)
-    logger.info("Agent mode: %s", settings.agent_mode.value)
-    logger.info("Active assets: %s", ", ".join(a.symbol for a in settings.assets))
+    async def post_init(application):
+        scheduler.start()
+        logger.info("Scheduler started (every %d minutes)", settings.check_interval_minutes)
+        logger.info("Agent mode: %s", settings.agent_mode.value)
+        logger.info("Active assets: %s", ", ".join(a.symbol for a in settings.assets))
+
+    app.post_init = post_init
 
     app.run_polling(drop_pending_updates=True)
 
