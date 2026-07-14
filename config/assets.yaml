@@ -1,0 +1,49 @@
+assets:
+  - symbol: "BTC/USD"
+    kraken_pair: "XXBTZUSD"
+    coinbase_pair: "BTC-USD"
+    active: true
+
+  - symbol: "ETH/USD"
+    kraken_pair: "XETHZUSD"
+    coinbase_pair: "ETH-USD"
+    active: true
+
+  - symbol: "XRP/USD"
+    kraken_pair: "XXRPZUSD"
+    coinbase_pair: "XRP-USD"
+    active: true
+
+  - symbol: "LINK/USD"
+    kraken_pair: "LINKUSD"
+    coinbase_pair: "LINK-USD"
+    active: true
+
+  - symbol: "LTC/USD"
+    kraken_pair: "XLTCZUSD"
+    coinbase_pair: "LTC-USD"
+    active: true
+
+settings:
+  starting_balance: 1000.0
+  win_level: 1120.0
+  loss_level: 950.0
+  risk_per_trade_pct_min: 0.0025
+  risk_per_trade_pct_max: 0.004
+  risk_per_trade_pct_default: 0.003
+  max_total_open_risk_pct: 0.01
+  max_open_positions: 2
+  commission_pct: 0.0026
+  spread_pct: 0.001
+  divergence_threshold_pct: 0.015
+  timezone: "Asia/Jerusalem"
+  active_hours_start: 8
+  active_hours_end: 23
+  check_interval_minutes: 15
+
+thresholds:
+  ignore_below_pct: 0.01
+  analyze_pct: 0.03
+  important_pct: 0.05
+  emergency_pct: 0.08
+  vertical_spike_pct: 0.08
