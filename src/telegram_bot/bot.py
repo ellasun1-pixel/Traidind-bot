@@ -14,6 +14,7 @@ from src.config import settings, AgentMode
 from src.scheduler.jobs import get_portfolio, get_last_signals
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session, AuditLog
+from src.auth.owner import owner_only, validate_auth_config
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,10 @@ def _store_pending_signal(signal_data: dict) -> int:
     return sid
 
 
+@owner_only
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 *Paper Challenge Agent*\n\n"
+        "\U0001f44b *Paper Challenge Agent*\n\n"
         "I monitor crypto markets and send you trading signals for the Kraken Funded Challenge.\n"
         "I never place real trades — you execute manually and confirm here.\n\n"
         "Use /help to see available commands.",
@@ -40,9 +42,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@owner_only
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "📋 *Available Commands*\n\n"
+        "\U0001f4cb *Available Commands*\n\n"
         "/status — Current regime, balance, active signals\n"
         "/portfolio — Full portfolio view\n"
         "/signal — Latest signal for each asset\n"
@@ -57,12 +60,13 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+@owner_only
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     portfolio = get_portfolio()
     last_signals = get_last_signals()
 
     status_lines = [
-        "📊 *Status*",
+        "\U0001f4ca *Status*",
         "",
         f"Mode: {settings.agent_mode.value}",
         f"Balance: ${portfolio.balance_usd:.2f}",
@@ -81,6 +85,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(status_lines), parse_mode="Markdown")
 
 
+@owner_only
 async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     portfolio = get_portfolio()
     prices = {}
@@ -89,6 +94,7 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+@owner_only
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last_signals = get_last_signals()
     if not last_signals:
@@ -105,16 +111,17 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("_All assets: NO TRADE._", parse_mode="Markdown")
 
 
+@owner_only
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     portfolio = get_portfolio()
     if not portfolio.closed_trades:
         await update.message.reply_text("_No completed trades yet._", parse_mode="Markdown")
         return
 
-    lines = ["📜 *Trade History*", ""]
+    lines = ["\U0001f4dc *Trade History*", ""]
     for trade in portfolio.closed_trades[-10:]:
         pnl = trade.realized_pnl or 0
-        emoji = "🟢" if pnl >= 0 else "🔴"
+        emoji = "\U0001f7e2" if pnl >= 0 else "\U0001f534"
         lines.append(
             f"{emoji} {trade.symbol}: {trade.quantity:.6f} @ ${trade.entry_price:.2f} "
             f"→ ${trade.exit_price:.2f} | P&L: ${pnl:.2f}"
@@ -122,6 +129,7 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+@owner_only
 async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     portfolio = get_portfolio()
     last_signals = get_last_signals()
@@ -160,11 +168,12 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     await update.message.reply_text(
-        "📋 *Confirmation Results*\n\n" + "\n".join(results),
+        "\U0001f4cb *Confirmation Results*\n\n" + "\n".join(results),
         parse_mode="Markdown",
     )
 
 
+@owner_only
 async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last_signals = get_last_signals()
     pending = {
@@ -185,6 +194,7 @@ async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@owner_only
 async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings.agent_mode = AgentMode.PAUSED
     await update.message.reply_text(
@@ -194,6 +204,7 @@ async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@owner_only
 async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings.agent_mode = AgentMode.PAPER_CHALLENGE
     await update.message.reply_text(
@@ -202,6 +213,7 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@owner_only
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if args and len(args) >= 2:
@@ -232,6 +244,8 @@ def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
         raise ValueError("TELEGRAM_BOT_TOKEN not set")
+
+    validate_auth_config()
 
     app = Application.builder().token(bot_token).build()
 
