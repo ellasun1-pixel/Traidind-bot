@@ -1,91 +1,49 @@
 # Running the Research Study on Render
 
-Your Render deployment already has network access to Kraken and Coinbase. Here is how to run the full study there.
+Your Render deployment has network access to Kraken and Coinbase. Here is how to run the study.
 
-## Step 1: SSH into Render
-
-Open a shell on your Render instance. You can do this from the Render dashboard under your service's "Shell" tab.
-
-## Step 2: Navigate to the Project
+## One Command (recommended)
 
 ```bash
 cd /opt/render/project/src
+python -m research.run_full_study --provider kraken --days 730
 ```
 
-(Or wherever your project is deployed.)
+This runs the entire pipeline:
+1. Downloads 2 years of daily candles for all 5 assets (~30 seconds)
+2. Validates data integrity
+3. Runs conservative strategy backtest on each asset
+4. Runs walk-forward evaluation (train/validation/test splits)
+5. Runs challenge simulation (1000 block-bootstrap runs)
+6. Generates the final report
 
-## Step 3: Fetch Data
-
-```bash
-python -m research.fetch_data --provider kraken --days 730
-```
-
-This downloads 2 years of daily candles for all 5 assets. Takes about 30 seconds.
-
-To use Coinbase instead:
-
-```bash
-python -m research.fetch_data --provider coinbase --days 730
-```
-
-## Step 4: Validate Data
-
-```bash
-python -m research.validate_data
-```
-
-All files should show `[PASS]`. If any show `[FAIL]`, the error messages explain what to fix.
-
-## Step 5: Run Backtest
-
-```bash
-python -m research.run_backtest --strategy conservative
-```
-
-To also test the challenge strategy:
-
-```bash
-python -m research.run_backtest --strategy challenge
-```
-
-## Step 6: Run Walk-Forward
-
-```bash
-python -m research.run_walk_forward --strategy conservative
-```
-
-## Step 7: Generate Report
-
-```bash
-python -m research.generate_report
-```
+Total runtime: approximately 5-10 minutes.
 
 The report is saved to `research/output/phase2_report.txt`.
 
-## Step 8: Copy Results
-
-Copy the output files back to your local machine:
+## Step-by-Step (alternative)
 
 ```bash
-# From your local machine:
-scp render:/opt/render/project/src/research/output/* ./research/output/
+cd /opt/render/project/src
+python -m research.fetch_data --provider kraken --days 730
+python -m research.validate_data
+python -m research.run_backtest --strategy conservative
+python -m research.run_walk_forward --strategy conservative
+python -m research.generate_report
 ```
-
-Or just read the console output from steps 5-7.
 
 ## Safety Guarantees
 
 This research framework:
 
-- Does NOT start Telegram
-- Does NOT start the scheduler
+- Does NOT start the bot or scheduler
 - Does NOT place any trades (paper or real)
 - Does NOT modify the production database
 - Does NOT read or use any API keys
 - Only makes read-only GET requests to public Kraken/Coinbase endpoints
 - Writes results only to `research/output/`
 
-You can verify this by checking that `LIVE_TRADING_ENABLED` is not read by any research module:
+Verify with:
 
 ```bash
 grep -r "LIVE_TRADING" research/
@@ -93,17 +51,19 @@ grep -r "LIVE_TRADING" research/
 
 This should return zero results.
 
-## Full Pipeline (Copy-Paste)
+## Expected Output
 
-```bash
-cd /opt/render/project/src
-python -m research.fetch_data --provider kraken --days 730
-python -m research.validate_data
-python -m research.run_backtest --strategy conservative
-python -m research.run_backtest --strategy challenge
-python -m research.run_walk_forward --strategy conservative
-python -m research.run_walk_forward --strategy challenge
-python -m research.generate_report
+After `run_full_study` completes, you will see:
+
+```
+  STUDY COMPLETE
+  Elapsed: ~300 seconds
+  Assets: BTC/USD, ETH/USD, XRP/USD, LINK/USD, LTC/USD
+  Results: research/output
+  Report:  research/output/phase2_report.txt
 ```
 
-Total runtime: approximately 5-10 minutes depending on data size.
+The `research/output/` directory will contain:
+- `BTC_USD_conservative_backtest.json` (and one per asset)
+- `BTC_USD_conservative_walkforward.json` (and one per asset)
+- `phase2_report.txt`
