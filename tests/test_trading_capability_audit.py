@@ -646,20 +646,20 @@ class TestRepeatedChopDiagnosis:
         }))
         assert regime == MarketRegime.CHOP
 
-    def test_chop_when_ema50_below_ema200(self):
-        """Price above EMA200 but EMA50 < EMA200 → CHOP (not TREND)."""
+    def test_trend_when_ema50_below_ema200(self):
+        """Price above EMA200 and ER20 >= 0.30 → TREND (EMA50 position irrelevant)."""
         regime = classify_regime(pd.Series({
             "close": 51000, "ema200": 50000, "ema50": 49500,
             "er20": 0.5, "rvol": 0.3, "rvol_median_252": 0.3,
             "rvol_pct25": 0.2, "price_change_48h": 0.01,
         }))
-        assert regime == MarketRegime.CHOP
+        assert regime == MarketRegime.TREND
 
     def test_chop_when_er20_too_low(self):
-        """Price and EMAs aligned but ER20 < 0.35 → CHOP."""
+        """Price above EMA200 but ER20 < 0.30 → CHOP."""
         regime = classify_regime(pd.Series({
             "close": 51000, "ema200": 50000, "ema50": 50500,
-            "er20": 0.3, "rvol": 0.3, "rvol_median_252": 0.3,
+            "er20": 0.25, "rvol": 0.3, "rvol_median_252": 0.3,
             "rvol_pct25": 0.2, "price_change_48h": 0.01,
         }))
         assert regime == MarketRegime.CHOP
@@ -694,8 +694,8 @@ class TestRepeatedChopDiagnosis:
         assert signal.signal_type == "NO_TRADE"
         assert len(signal.reason) > 0
 
-    def test_buy_requires_three_conditions_for_trend(self):
-        """For TREND: ER20>=0.35 AND close>EMA200 AND EMA50>EMA200. Missing any → CHOP or no BUY."""
+    def test_buy_requires_two_conditions_for_trend(self):
+        """For TREND: ER20>=0.30 AND close>EMA200. Missing either → CHOP or no BUY."""
         good = pd.Series({
             "close": 55000, "ema200": 49000, "ema50": 52000,
             "er20": 0.5, "rvol": 0.3, "rvol_median_252": 0.3,
@@ -711,9 +711,9 @@ class TestRepeatedChopDiagnosis:
         bad_ema200["close"] = 48000
         assert classify_regime(bad_ema200) != MarketRegime.TREND
 
-        bad_ema50 = good.copy()
-        bad_ema50["ema50"] = 48000
-        assert classify_regime(bad_ema50) != MarketRegime.TREND
+        ema50_irrelevant = good.copy()
+        ema50_irrelevant["ema50"] = 48000
+        assert classify_regime(ema50_irrelevant) == MarketRegime.TREND
 
 
 # ── AUDIT 7: Logging and Diagnostics ─────────────────────────

@@ -296,15 +296,21 @@ class HistoricalBacktester:
             trade_rec.mfe = max(trade_rec.mfe, (mfe_price - entry) / entry)
             trade_rec.mae = min(trade_rec.mae, (mae_price - entry) / entry)
 
+            risk_per_unit = pos.get("risk_per_unit", 0)
+            breakeven_threshold = entry + risk_per_unit * 1.5 if risk_per_unit > 0 else None
+            if breakeven_threshold and high >= breakeven_threshold:
+                sl = max(sl, entry)
+                pos["stop_loss"] = sl
+
             sl_hit = low <= sl
             tp_hit = high >= tp
 
             if sl_hit and tp_hit:
                 exit_price = sl * (1 - self.config.slippage_pct)
-                exit_reason = "STOP_LOSS"
+                exit_reason = "STOP_LOSS_BREAKEVEN" if sl >= entry else "STOP_LOSS"
             elif sl_hit:
                 exit_price = sl * (1 - self.config.slippage_pct)
-                exit_reason = "STOP_LOSS"
+                exit_reason = "STOP_LOSS_BREAKEVEN" if sl >= entry else "STOP_LOSS"
             elif tp_hit:
                 exit_price = tp * (1 - self.config.spread_pct / 2)
                 exit_reason = "TAKE_PROFIT"

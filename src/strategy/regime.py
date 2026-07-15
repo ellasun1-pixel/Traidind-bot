@@ -50,7 +50,7 @@ def classify_regime(row: pd.Series) -> MarketRegime:
     if rvol_pct25 > 0 and rvol <= rvol_pct25 and er20 < 0.35:
         return MarketRegime.LOWVOL
 
-    if er20 >= 0.35 and close > ema200 and ema50 > ema200:
+    if er20 >= 0.30 and close > ema200:
         return MarketRegime.TREND
 
     return MarketRegime.CHOP

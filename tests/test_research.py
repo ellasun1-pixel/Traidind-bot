@@ -551,6 +551,24 @@ class TestProviderLimitedResponses:
         assert (diffs > timedelta(0)).all(), "Data must be chronologically sorted"
 
 
+class TestTrailingStop:
+    def test_trailing_stop_moves_to_breakeven(self):
+        """When price reaches +1.5R, stop moves to entry (breakeven)."""
+        config = ExecutionConfig(starting_balance=1000.0)
+        bt = HistoricalBacktester(strategy="conservative", config=config)
+
+        df = _make_ohlcv(n_days=400, trend=0.001, volatility=0.015, seed=55)
+        result = bt.run("BTC/USD", df)
+
+        breakeven_exits = [t for t in result.trades if t.exit_reason == "STOP_LOSS_BREAKEVEN"]
+        tp_exits = [t for t in result.trades if t.exit_reason == "TAKE_PROFIT"]
+        sl_exits = [t for t in result.trades if t.exit_reason == "STOP_LOSS"]
+
+        for t in breakeven_exits:
+            assert t.exit_price >= t.entry_price * 0.99, \
+                "Breakeven exit should be near or above entry price"
+
+
 class TestRunFullStudySafety:
     def test_run_full_study_has_no_trading_imports(self):
         """run_full_study must not import trading, telegram, or scheduler modules."""

@@ -72,7 +72,7 @@ class AppSettings(BaseSettings):
     emergency_pct: float = 0.08
     vertical_spike_pct: float = 0.08
 
-    take_profit_risk_multiple: float = 3.0
+    take_profit_risk_multiple: float = 2.0
 
     assets: list[AssetConfig] = Field(default_factory=list)
 
