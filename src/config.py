@@ -38,6 +38,7 @@ class AppSettings(BaseSettings):
     agent_mode: AgentMode = AgentMode.PAPER_CHALLENGE
     beginner_explanations: bool = True
     database_url: str = f"sqlite:///{BASE_DIR / 'data' / 'challenge.db'}"
+    app_env: str = "development"
 
     signal_expiry_minutes: int = 30
     strategy_version: str = "1.0"

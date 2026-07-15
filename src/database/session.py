@@ -16,8 +16,26 @@ _engine = None
 _SessionLocal = None
 
 
+def _is_production() -> bool:
+    return os.environ.get("APP_ENV", "development").lower() == "production"
+
+
 def _get_database_url() -> str:
     url = os.environ.get("DATABASE_URL", "")
+
+    if _is_production():
+        if not url:
+            raise RuntimeError(
+                "DATABASE_URL is required in production (APP_ENV=production). "
+                "Set a PostgreSQL connection string."
+            )
+        normalized = url.replace("postgres://", "postgresql://", 1) if url.startswith("postgres://") else url
+        if normalized.startswith("sqlite"):
+            raise RuntimeError(
+                "SQLite is not supported in production (APP_ENV=production). "
+                "Set DATABASE_URL to a PostgreSQL connection string."
+            )
+
     if not url:
         base_dir = Path(__file__).resolve().parent.parent.parent
         url = f"sqlite:///{base_dir / 'data' / 'challenge.db'}"
@@ -38,8 +56,6 @@ def get_engine(database_url: str | None = None):
         db_path = url.replace("sqlite:///", "")
         if db_path:
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        if not url.startswith("sqlite"):
-            logger.warning("Using SQLite — not for production")
 
     kwargs = {"echo": False, "pool_pre_ping": True}
     if not is_sqlite:
