@@ -55,6 +55,11 @@ class AppSettings(BaseSettings):
     commission_pct: float = 0.0026
     spread_pct: float = 0.001
     divergence_threshold_pct: float = 0.015
+    max_provider_price_divergence_pct: float = 0.05
+
+    min_valid_candles: int = 250
+    target_fetch_candles: int = 300
+    max_daily_candle_age_hours: int = 30
 
     timezone: str = "Asia/Jerusalem"
     active_hours_start: int = 8

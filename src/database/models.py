@@ -205,10 +205,12 @@ class MarketDataMeta(Base):
     timeframe = Column(String(10), nullable=False)
     source = Column(String(20), nullable=False)
     candle_count = Column(Integer, nullable=False)
+    valid_candle_count = Column(Integer)
     oldest_candle = Column(DateTime(timezone=True), nullable=False)
     newest_candle = Column(DateTime(timezone=True), nullable=False)
     fetched_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     is_sufficient = Column(Boolean, nullable=False)
+    validation_error = Column(Text)
 
     __table_args__ = (
         UniqueConstraint("asset_id", "timeframe", "source", name="uq_market_data_meta"),
