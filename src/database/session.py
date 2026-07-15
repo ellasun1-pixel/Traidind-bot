@@ -106,6 +106,14 @@ def get_session(engine=None):
         session.close()
 
 
+REQUIRED_TABLES = [
+    "assets", "price_history", "signals", "paper_account",
+    "paper_positions", "trade_history", "app_settings", "alert_history",
+    "audit_log", "scheduler_state", "market_data_meta", "daily_snapshots",
+    "health_transitions",
+]
+
+
 def init_db(engine=None):
     eng = engine or get_engine()
     url = str(eng.url)
@@ -115,7 +123,25 @@ def init_db(engine=None):
         Base.metadata.create_all(eng)
         logger.info("SQLite tables created via metadata (dev mode)")
     else:
-        logger.info("PostgreSQL detected — use 'alembic upgrade head' for migrations")
+        missing = _check_required_tables(eng)
+        if missing:
+            logger.error(
+                "PostgreSQL is missing required tables: %s. "
+                "Run 'alembic upgrade head' before starting the application.",
+                ", ".join(missing),
+            )
+            raise RuntimeError(
+                f"Database schema incomplete — missing tables: {', '.join(missing)}. "
+                f"Run 'alembic upgrade head' first."
+            )
+        logger.info("PostgreSQL schema verified — all %d required tables present", len(REQUIRED_TABLES))
+
+
+def _check_required_tables(engine) -> list[str]:
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    existing = set(inspector.get_table_names())
+    return [t for t in REQUIRED_TABLES if t not in existing]
 
 
 def check_db_health(engine=None) -> dict:
