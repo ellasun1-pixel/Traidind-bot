@@ -17,6 +17,7 @@ from src.portfolio.manager import PaperPortfolio
 from src.notifier.notification_logic import NotificationManager
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session
+from src.database.models import Signal, Asset
 from src.database.repository import (
     AssetRepository, SchedulerStateRepository, AuditLogRepository,
     PriceHistoryRepository, MarketDataMetaRepository, SignalRepository,
@@ -336,6 +337,66 @@ async def expire_signals_job():
         logger.error("expire_signals failed: %s", e, exc_info=True)
 
 
+async def _build_report(report_type: str) -> str:
+    portfolio = get_portfolio()
+    pipeline = get_pipeline()
+    prices = {}
+    for asset in settings.assets:
+        try:
+            kraken_q, coinbase_q = await pipeline.get_prices(asset)
+            quote = kraken_q or coinbase_q
+            if quote:
+                prices[asset.symbol] = quote.price
+        except Exception:
+            pass
+
+    summary = portfolio.get_portfolio_summary(prices)
+    formatter = _formatter or SignalFormatter()
+
+    health_service = get_health_service()
+    system = health_service.check_all()
+    health_status = system.status.value
+
+    pending_signals = []
+    try:
+        with get_session() as session:
+            from src.signals.lifecycle import SignalLifecycle
+            lifecycle = SignalLifecycle(session)
+            for sig in session.query(Signal).filter(Signal.status == "pending").all():
+                asset_obj = session.query(Asset).filter(Asset.id == sig.asset_id).first()
+                pending_signals.append({
+                    "asset": asset_obj.symbol if asset_obj else "Unknown",
+                    "type": sig.signal_type,
+                    "expires_at": sig.expires_at,
+                })
+    except Exception:
+        pass
+
+    scheduler_info = {}
+    try:
+        with get_session() as session:
+            sched_repo = SchedulerStateRepository(session)
+            for s in sched_repo.get_all():
+                if s.job_name == "market_check":
+                    if s.last_success_at:
+                        ts = s.last_success_at
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
+                        scheduler_info["last_market_check"] = ts.strftime("%H:%M UTC")
+                    scheduler_info["next_market_check"] = f"~{settings.check_interval_minutes} min"
+    except Exception:
+        pass
+
+    return formatter.format_report(
+        report_type=report_type,
+        summary=summary,
+        health_status=health_status,
+        last_signals=_last_signals or None,
+        pending_signals=pending_signals or None,
+        scheduler_info=scheduler_info or None,
+    )
+
+
 async def morning_report_job():
     job_name = "morning_report"
     start_time = time.monotonic()
@@ -352,7 +413,7 @@ async def morning_report_job():
 
         with get_session() as session:
             setting_repo = AppSettingRepository(session)
-            last_date = setting_repo.get(f"last_morning_report_date")
+            last_date = setting_repo.get("last_morning_report_date")
             if last_date == today_local:
                 logger.info("Morning report already sent today")
                 sched_repo2 = SchedulerStateRepository(session)
@@ -362,36 +423,12 @@ async def morning_report_job():
         if _send_message_func is None:
             return
 
-        portfolio = get_portfolio()
-        pipeline = get_pipeline()
-        prices = {}
-        for asset in settings.assets:
-            try:
-                kraken_q, coinbase_q = await pipeline.get_prices(asset)
-                quote = kraken_q or coinbase_q
-                if quote:
-                    prices[asset.symbol] = quote.price
-            except Exception:
-                pass
-
-        summary = portfolio.get_portfolio_summary(prices)
-        formatter = _formatter or SignalFormatter()
-        message = "☀️ *Morning Report*\n\n" + formatter.format_portfolio_summary(summary)
-
-        overnight = []
-        for symbol, sig in _last_signals.items():
-            if sig.signal_type != "NO_TRADE":
-                overnight.append(f"• {symbol}: {sig.signal_type} ({sig.reason})")
-        if overnight:
-            message += "\n\n*Overnight signals (check if still valid):*\n" + "\n".join(overnight)
-        else:
-            message += "\n\n_No overnight signals._"
-
+        message = await _build_report("morning")
         await _send_message_func(message)
 
         with get_session() as session:
             setting_repo = AppSettingRepository(session)
-            setting_repo.set(f"last_morning_report_date", today_local)
+            setting_repo.set("last_morning_report_date", today_local)
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
         with get_session() as session:
@@ -422,7 +459,7 @@ async def evening_report_job():
 
         with get_session() as session:
             setting_repo = AppSettingRepository(session)
-            last_date = setting_repo.get(f"last_evening_report_date")
+            last_date = setting_repo.get("last_evening_report_date")
             if last_date == today_local:
                 logger.info("Evening report already sent today")
                 sched_repo2 = SchedulerStateRepository(session)
@@ -432,28 +469,12 @@ async def evening_report_job():
         if _send_message_func is None:
             return
 
-        portfolio = get_portfolio()
-        pipeline = get_pipeline()
-        prices = {}
-        for asset in settings.assets:
-            try:
-                kraken_q, coinbase_q = await pipeline.get_prices(asset)
-                quote = kraken_q or coinbase_q
-                if quote:
-                    prices[asset.symbol] = quote.price
-            except Exception:
-                pass
-
-        summary = portfolio.get_portfolio_summary(prices)
-        formatter = _formatter or SignalFormatter()
-        message = "🌙 *Evening Report*\n\n" + formatter.format_portfolio_summary(summary)
-        message += "\n\n_Entering night mode. Only emergency alerts until 08:00._"
-
+        message = await _build_report("evening")
         await _send_message_func(message)
 
         with get_session() as session:
             setting_repo = AppSettingRepository(session)
-            setting_repo.set(f"last_evening_report_date", today_local)
+            setting_repo.set("last_evening_report_date", today_local)
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
         with get_session() as session:

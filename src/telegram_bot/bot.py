@@ -108,13 +108,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     for symbol, sig in last_signals.items():
-        if sig.signal_type != "NO_TRADE":
-            text = formatter.format_signal(sig)
-            await update.message.reply_text(text, parse_mode="Markdown")
-
-    actionable = [s for s in last_signals.values() if s.signal_type != "NO_TRADE"]
-    if not actionable:
-        await update.message.reply_text("_All assets: NO TRADE._", parse_mode="Markdown")
+        text = formatter.format_signal(sig)
+        await update.message.reply_text(text, parse_mode="Markdown")
 
 
 @owner_only
