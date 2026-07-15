@@ -42,7 +42,12 @@ def run_bot():
     from src.config import settings
     from src.database import init_db, check_db_health
     from src.telegram_bot.bot import create_bot
-    from src.scheduler.jobs import setup_scheduler, set_send_message_func
+    from src.scheduler.jobs import (
+        setup_scheduler, set_send_message_func, startup_sweep, market_check_job,
+    )
+    from src.auth.owner import validate_auth_config
+
+    logger.info("Starting bot — validating environment...")
 
     start_health_server()
 
@@ -54,6 +59,9 @@ def run_bot():
 
     init_db()
     logger.info("Database initialized")
+
+    validate_auth_config()
+    logger.info("Authentication configuration validated")
 
     app = create_bot()
     logger.info("Telegram bot created")
@@ -72,10 +80,19 @@ def run_bot():
     set_send_message_func(send_to_chat)
 
     async def post_init(application):
+        await startup_sweep()
+
         scheduler.start()
-        logger.info("Scheduler started (every %d minutes)", settings.check_interval_minutes)
+        logger.info("Scheduler started (market check every %d min)", settings.check_interval_minutes)
         logger.info("Agent mode: %s", settings.agent_mode.value)
         logger.info("Active assets: %s", ", ".join(a.symbol for a in settings.assets))
+        logger.info("Live trading: %s", settings.live_trading_enabled)
+
+        try:
+            await market_check_job()
+            logger.info("Initial market check completed")
+        except Exception as e:
+            logger.error("Initial market check failed: %s", e)
 
     app.post_init = post_init
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from src.database.models import (
     Asset, Signal, PaperAccount, PaperPosition,
     TradeHistory, AppSetting, AuditLog, AlertHistory,
     SchedulerState, MarketDataMeta, DailySnapshot,
+    PriceHistory,
 )
 
 logger = logging.getLogger(__name__)
@@ -236,25 +237,74 @@ class SchedulerStateRepository:
             self.session.flush()
         return state
 
+    def get_all(self) -> list[SchedulerState]:
+        return self.session.query(SchedulerState).all()
+
+    def try_acquire_lock(
+        self, job_name: str, lock_owner: str, lock_duration_seconds: int = 300
+    ) -> bool:
+        now = datetime.now(timezone.utc)
+        state = self.get_or_create(job_name)
+        if state.lock_owner and state.lock_expires_at:
+            expires = state.lock_expires_at
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires > now:
+                return False
+        state.lock_owner = lock_owner
+        state.lock_expires_at = now + timedelta(seconds=lock_duration_seconds)
+        state.current_status = "running"
+        state.last_started_at = now
+        state.last_run_at = now
+        state.run_count += 1
+        self.session.flush()
+        return True
+
+    def release_lock(self, job_name: str) -> None:
+        state = self.get_or_create(job_name)
+        state.lock_owner = None
+        state.lock_expires_at = None
+        self.session.flush()
+
     def mark_started(self, job_name: str) -> SchedulerState:
         state = self.get_or_create(job_name)
         state.last_run_at = datetime.now(timezone.utc)
+        state.last_started_at = state.last_run_at
+        state.current_status = "running"
         state.run_count += 1
         self.session.flush()
         return state
 
-    def mark_success(self, job_name: str, next_run_at: datetime = None) -> SchedulerState:
+    def mark_success(self, job_name: str, duration_ms: int = None,
+                     next_run_at: datetime = None) -> SchedulerState:
+        now = datetime.now(timezone.utc)
         state = self.get_or_create(job_name)
-        state.last_success_at = datetime.now(timezone.utc)
+        state.last_success_at = now
+        state.last_completed_at = now
+        state.current_status = "idle"
         state.last_error = None
+        state.success_count = (state.success_count or 0) + 1
+        if duration_ms is not None:
+            state.last_duration_ms = duration_ms
         if next_run_at:
             state.next_run_at = next_run_at
+        state.lock_owner = None
+        state.lock_expires_at = None
         self.session.flush()
         return state
 
-    def mark_failure(self, job_name: str, error: str) -> SchedulerState:
+    def mark_failure(self, job_name: str, error: str,
+                     duration_ms: int = None) -> SchedulerState:
+        now = datetime.now(timezone.utc)
         state = self.get_or_create(job_name)
         state.last_error = error
+        state.last_completed_at = now
+        state.current_status = "idle"
+        state.failure_count = (state.failure_count or 0) + 1
+        if duration_ms is not None:
+            state.last_duration_ms = duration_ms
+        state.lock_owner = None
+        state.lock_expires_at = None
         self.session.flush()
         return state
 
@@ -313,3 +363,91 @@ class DailySnapshotRepository:
         self.session.add(snapshot)
         self.session.flush()
         return snapshot
+
+
+class PriceHistoryRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def upsert_candle(self, asset_id: int, timeframe: str, open_time: datetime,
+                      open_: float, high: float, low: float, close: float,
+                      volume: float, source: str) -> PriceHistory:
+        existing = (
+            self.session.query(PriceHistory)
+            .filter(and_(
+                PriceHistory.asset_id == asset_id,
+                PriceHistory.timeframe == timeframe,
+                PriceHistory.open_time == open_time,
+            ))
+            .first()
+        )
+        if existing:
+            existing.open = open_
+            existing.high = high
+            existing.low = low
+            existing.close = close
+            existing.volume = volume
+            existing.source = source
+            existing.fetched_at = datetime.now(timezone.utc)
+            self.session.flush()
+            return existing
+
+        record = PriceHistory(
+            asset_id=asset_id, timeframe=timeframe, open_time=open_time,
+            open=open_, high=high, low=low, close=close,
+            volume=volume, source=source,
+        )
+        self.session.add(record)
+        self.session.flush()
+        return record
+
+    def bulk_upsert(self, asset_id: int, timeframe: str, source: str,
+                    candles: list) -> int:
+        count = 0
+        for c in candles:
+            self.upsert_candle(
+                asset_id=asset_id, timeframe=timeframe,
+                open_time=c.open_time, open_=c.open, high=c.high,
+                low=c.low, close=c.close, volume=c.volume, source=source,
+            )
+            count += 1
+        return count
+
+
+class MarketDataMetaRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def upsert(self, asset_id: int, timeframe: str, source: str,
+               candle_count: int, valid_candle_count: int,
+               oldest_candle: datetime, newest_candle: datetime,
+               is_sufficient: bool, validation_error: str = None) -> MarketDataMeta:
+        existing = (
+            self.session.query(MarketDataMeta)
+            .filter(and_(
+                MarketDataMeta.asset_id == asset_id,
+                MarketDataMeta.timeframe == timeframe,
+                MarketDataMeta.source == source,
+            ))
+            .first()
+        )
+        if existing:
+            existing.candle_count = candle_count
+            existing.valid_candle_count = valid_candle_count
+            existing.oldest_candle = oldest_candle
+            existing.newest_candle = newest_candle
+            existing.is_sufficient = is_sufficient
+            existing.validation_error = validation_error
+            existing.fetched_at = datetime.now(timezone.utc)
+            self.session.flush()
+            return existing
+
+        meta = MarketDataMeta(
+            asset_id=asset_id, timeframe=timeframe, source=source,
+            candle_count=candle_count, valid_candle_count=valid_candle_count,
+            oldest_candle=oldest_candle, newest_candle=newest_candle,
+            is_sufficient=is_sufficient, validation_error=validation_error,
+        )
+        self.session.add(meta)
+        self.session.flush()
+        return meta

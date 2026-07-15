@@ -194,6 +194,14 @@ class SchedulerState(Base):
     next_run_at = Column(DateTime(timezone=True))
     run_count = Column(Integer, nullable=False, default=0)
     last_error = Column(Text)
+    lock_owner = Column(String(100))
+    lock_expires_at = Column(DateTime(timezone=True))
+    current_status = Column(String(20))
+    success_count = Column(Integer, nullable=False, default=0)
+    failure_count = Column(Integer, nullable=False, default=0)
+    last_duration_ms = Column(Integer)
+    last_completed_at = Column(DateTime(timezone=True))
+    last_started_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
 
 

@@ -11,7 +11,7 @@ from telegram.ext import (
 )
 
 from src.config import settings, AgentMode
-from src.scheduler.jobs import get_portfolio, get_last_signals
+from src.scheduler.jobs import get_portfolio, get_last_signals, get_scheduler_status
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session, AuditLog
 from src.auth.owner import owner_only, validate_auth_config
@@ -58,6 +58,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/resume — Resume signal generation\n"
         "/settings — View/toggle settings\n"
         "/auth — Authentication diagnostics\n"
+        "/scheduler — Job execution status\n"
         "/help — Show this message"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -267,6 +268,33 @@ async def cmd_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+@owner_only
+async def cmd_scheduler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    statuses = get_scheduler_status()
+    if not statuses:
+        await update.message.reply_text("_No scheduler data yet._", parse_mode="Markdown")
+        return
+
+    lines = ["\U0001f553 *Scheduler Status*", ""]
+    for s in statuses:
+        status_emoji = "\U0001f7e2" if s["current_status"] == "idle" else "\U0001f7e1"
+        if s["last_error"]:
+            status_emoji = "\U0001f534"
+        lines.append(f"{status_emoji} *{s['job_name']}*")
+        lines.append(f"  Status: {s['current_status']}")
+        lines.append(f"  Runs: {s['run_count']} (OK: {s['success_count']}, Fail: {s['failure_count']})")
+        if s["last_duration_ms"] is not None:
+            lines.append(f"  Last duration: {s['last_duration_ms']}ms")
+        if s["last_run_at"]:
+            lines.append(f"  Last run: {s['last_run_at'].strftime('%Y-%m-%d %H:%M UTC')}")
+        if s["last_error"]:
+            err = s["last_error"][:100]
+            lines.append(f"  Error: {err}")
+        lines.append("")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
@@ -288,5 +316,6 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("auth", cmd_auth))
+    app.add_handler(CommandHandler("scheduler", cmd_scheduler))
 
     return app
