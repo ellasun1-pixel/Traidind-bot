@@ -36,9 +36,28 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> 
     return adx_val
 
 
-def realized_volatility(close: pd.Series, window: int = 252) -> pd.Series:
+def realized_volatility(close: pd.Series, window: int = 20) -> pd.Series:
     log_returns = np.log(close / close.shift(1))
-    return log_returns.rolling(window).std() * np.sqrt(window)
+    return log_returns.rolling(window).std() * np.sqrt(252)
+
+
+WARMUP = {
+    "ema50": 50,
+    "ema200": 200,
+    "er20": 20,
+    "adx14": 28,
+    "rvol": 20,
+    "rvol_median_60": 80,
+    "rvol_pct25_60": 80,
+    "price_change_48h": 2,
+    "price_change_short": 1,
+}
+
+MIN_CANDLES_FOR_FULL_VALIDITY = 200
+
+
+def indicator_warmup_status(n_candles: int) -> dict[str, bool]:
+    return {name: n_candles >= req for name, req in WARMUP.items()}
 
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -54,9 +73,9 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df["adx14"] = np.nan
         df["has_ohlc"] = False
 
-    df["rvol"] = realized_volatility(df["close"])
-    df["rvol_median_252"] = df["rvol"].rolling(252).median()
-    df["rvol_pct25"] = df["rvol"].rolling(252).quantile(0.25)
+    df["rvol"] = realized_volatility(df["close"], 20)
+    df["rvol_median_252"] = df["rvol"].rolling(60).median()
+    df["rvol_pct25"] = df["rvol"].rolling(60).quantile(0.25)
     df["price_change_48h"] = df["close"].pct_change(periods=2)
     df["price_change_short"] = df["close"].pct_change(periods=1)
     return df

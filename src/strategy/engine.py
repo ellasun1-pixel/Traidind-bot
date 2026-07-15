@@ -57,6 +57,14 @@ class StrategyEngine:
         prev = daily.iloc[-2] if len(daily) > 1 else latest
         regime = classify_regime(latest)
 
+        if regime == MarketRegime.DATA_INSUFFICIENT:
+            from src.strategy.regime import regime_nan_fields
+            nan_fields = regime_nan_fields(latest)
+            return self._no_trade(
+                symbol, regime, portfolio_balance,
+                f"Data insufficient — NaN in: {', '.join(nan_fields)}",
+            )
+
         existing = [p for p in open_positions if p.get("symbol") == symbol]
 
         sell_signal = self._check_sell_conditions(

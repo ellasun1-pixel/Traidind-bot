@@ -18,8 +18,8 @@ from src.auth.owner import owner_only, validate_auth_config
 from src.auth.permissions import Permission, get_user_permissions
 from src.database.session import check_db_health
 from src.health.service import get_health_service
-from src.strategy.indicators import compute_indicators
-from src.strategy.regime import classify_regime, MarketRegime
+from src.strategy.indicators import compute_indicators, indicator_warmup_status, WARMUP
+from src.strategy.regime import classify_regime, MarketRegime, regime_nan_fields
 from src.strategy.engine import StrategyEngine
 
 logger = logging.getLogger(__name__)
@@ -334,7 +334,7 @@ async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _debug_asset(pipeline, asset) -> str:
-    from src.market_data.pipeline import _candles_to_dataframe
+    import numpy as np
 
     lines = [f"\U0001f50d *{asset.symbol}*", ""]
 
@@ -350,59 +350,117 @@ async def _debug_asset(pipeline, asset) -> str:
     lines.append(f"Price: ${safety.current_price:,.2f}")
     lines.append("")
 
-    enriched = compute_indicators(safety.daily_df)
+    raw_df = safety.daily_df
+    n_candles = len(raw_df)
+    enriched = compute_indicators(raw_df)
     latest = enriched.iloc[-1]
     prev = enriched.iloc[-2] if len(enriched) > 1 else latest
 
-    ema50 = float(latest.get("ema50", 0) or 0)
-    ema200 = float(latest.get("ema200", 0) or 0)
-    er20 = float(latest.get("er20", 0) or 0)
-    adx14 = float(latest.get("adx14", 0) or 0)
-    rvol = float(latest.get("rvol", 0) or 0)
-    rvol_median = float(latest.get("rvol_median_252", 0) or 0)
-    rvol_pct25 = float(latest.get("rvol_pct25", 0) or 0)
-    p48h = float(latest.get("price_change_48h", 0) or 0)
-    p_short = float(latest.get("price_change_short", 0) or 0)
+    first_ts = enriched.iloc[0].get("open_time", "?")
+    last_ts = enriched.iloc[-1].get("open_time", "?")
+
+    lines.append("*Data Quality*")
+    lines.append(f"Candles: {n_candles}")
+    lines.append(f"First: {first_ts}")
+    lines.append(f"Last:  {last_ts}")
+
+    if "open_time" in enriched.columns:
+        times = pd.to_datetime(enriched["open_time"], errors="coerce").dropna()
+        if len(times) > 1:
+            diffs = times.diff().dropna()
+            median_gap = diffs.median()
+            big_gaps = diffs[diffs > median_gap * 2]
+            if len(big_gaps) > 0:
+                lines.append(f"Gaps detected: {len(big_gaps)}")
+                worst = big_gaps.max()
+                lines.append(f"Largest gap: {worst}")
+            else:
+                lines.append("Gaps: none")
+
+    warmup = indicator_warmup_status(n_candles)
+    not_ready = [name for name, ok in warmup.items() if not ok]
+    if not_ready:
+        lines.append(f"Warm-up incomplete: {', '.join(not_ready)}")
+    else:
+        lines.append("Warm-up: all indicators valid")
+
+    nan_fields = regime_nan_fields(latest)
+    if nan_fields:
+        lines.append(f"NaN regime inputs: {', '.join(nan_fields)}")
+    else:
+        lines.append("NaN regime inputs: none")
+    lines.append("")
+
+    def _fv(val):
+        if val is None or (isinstance(val, float) and np.isnan(val)):
+            return "NaN"
+        return val
+
+    ema50 = _fv(latest.get("ema50"))
+    ema200 = _fv(latest.get("ema200"))
+    er20 = _fv(latest.get("er20"))
+    adx14 = _fv(latest.get("adx14"))
+    rvol = _fv(latest.get("rvol"))
+    rvol_median = _fv(latest.get("rvol_median_252"))
+    rvol_pct25 = _fv(latest.get("rvol_pct25"))
+    p48h = _fv(latest.get("price_change_48h"))
+    p_short = _fv(latest.get("price_change_short"))
     close = float(latest.get("close", 0))
-    candle_ts = latest.get("open_time", "?")
     prev_close = float(prev.get("close", 0))
-    prev_ema50 = float(prev.get("ema50", 0) or 0)
+    prev_ema50_v = prev.get("ema50")
+    prev_ema50 = float(prev_ema50_v) if prev_ema50_v is not None and not (isinstance(prev_ema50_v, float) and np.isnan(prev_ema50_v)) else 0.0
 
     lines.append("*Indicators*")
-    lines.append(f"EMA50: {ema50:,.2f}")
-    lines.append(f"EMA200: {ema200:,.2f}")
-    lines.append(f"ER20: {er20:.4f}")
-    lines.append(f"ADX14: {adx14:.1f}")
-    lines.append(f"RVol: {rvol:.4f}  (med: {rvol_median:.4f})")
-    lines.append(f"48h change: {p48h:+.2%}")
-    lines.append(f"Candles: {len(enriched)}  |  Latest: {candle_ts}")
+    lines.append(f"EMA50: {ema50 if ema50 == 'NaN' else f'{ema50:,.2f}'}")
+    lines.append(f"EMA200: {ema200 if ema200 == 'NaN' else f'{ema200:,.2f}'}")
+    lines.append(f"ER20: {er20 if er20 == 'NaN' else f'{er20:.4f}'}")
+    lines.append(f"ADX14: {adx14 if adx14 == 'NaN' else f'{adx14:.1f}'}")
+    lines.append(f"RVol: {rvol if rvol == 'NaN' else f'{rvol:.4f}'}  (med: {rvol_median if rvol_median == 'NaN' else f'{rvol_median:.4f}'})")
+    lines.append(f"48h change: {p48h if p48h == 'NaN' else f'{p48h:+.2%}'}")
     lines.append("")
 
     def check(ok): return "✅" if ok else "❌"
 
     regime = classify_regime(latest)
 
+    if regime == MarketRegime.DATA_INSUFFICIENT:
+        lines.append(f"*Regime: {regime.value}*")
+        lines.append(f"Cannot classify — NaN in: {', '.join(nan_fields)}")
+        lines.append("")
+        lines.append("*Signal: NO\\_TRADE*")
+        lines.append("Reason: Data insufficient for regime classification")
+        return "\n".join(lines)
+
+    rvol_f = float(rvol)
+    rvol_median_f = float(rvol_median)
+    rvol_pct25_f = float(rvol_pct25)
+    er20_f = float(er20)
+    p48h_f = float(p48h)
+    p_short_f = float(p_short)
+    ema50_f = float(ema50)
+    ema200_f = float(ema200)
+
     lines.append("*PANIC conditions*")
-    c_panic_drop = p48h <= -0.10
-    c_panic_vol = rvol_median > 0 and rvol > 1.8 * rvol_median
-    lines.append(f"  48h drop ≤ -10%    {check(c_panic_drop)}  ({p48h:+.2%})")
-    lines.append(f"  RVol > 1.8×median  {check(c_panic_vol)}  ({rvol:.4f} vs {1.8*rvol_median:.4f})")
+    c_panic_drop = p48h_f <= -0.10
+    c_panic_vol = rvol_median_f > 0 and rvol_f > 1.8 * rvol_median_f
+    lines.append(f"  48h drop ≤ -10%    {check(c_panic_drop)}  ({p48h_f:+.2%})")
+    lines.append(f"  RVol > 1.8×median  {check(c_panic_vol)}  ({rvol_f:.4f} vs {1.8*rvol_median_f:.4f})")
     lines.append("")
 
     lines.append("*LOWVOL conditions*")
-    c_lv_vol = rvol_pct25 > 0 and rvol <= rvol_pct25
-    c_lv_er = er20 < 0.35
-    lines.append(f"  RVol ≤ pct25       {check(c_lv_vol)}  ({rvol:.4f} vs {rvol_pct25:.4f})")
-    lines.append(f"  ER20 < 0.35        {check(c_lv_er)}  ({er20:.4f})")
+    c_lv_vol = rvol_pct25_f > 0 and rvol_f <= rvol_pct25_f
+    c_lv_er = er20_f < 0.35
+    lines.append(f"  RVol ≤ pct25       {check(c_lv_vol)}  ({rvol_f:.4f} vs {rvol_pct25_f:.4f})")
+    lines.append(f"  ER20 < 0.35        {check(c_lv_er)}  ({er20_f:.4f})")
     lines.append("")
 
     lines.append("*TREND conditions*")
-    c_tr_er = er20 >= 0.35
-    c_tr_price = close > ema200
-    c_tr_ema = ema50 > ema200
-    lines.append(f"  ER20 ≥ 0.35        {check(c_tr_er)}  ({er20:.4f})")
-    lines.append(f"  Price > EMA200     {check(c_tr_price)}  ({close:,.2f} vs {ema200:,.2f})")
-    lines.append(f"  EMA50 > EMA200     {check(c_tr_ema)}  ({ema50:,.2f} vs {ema200:,.2f})")
+    c_tr_er = er20_f >= 0.35
+    c_tr_price = close > ema200_f
+    c_tr_ema = ema50_f > ema200_f
+    lines.append(f"  ER20 ≥ 0.35        {check(c_tr_er)}  ({er20_f:.4f})")
+    lines.append(f"  Price > EMA200     {check(c_tr_price)}  ({close:,.2f} vs {ema200_f:,.2f})")
+    lines.append(f"  EMA50 > EMA200     {check(c_tr_ema)}  ({ema50_f:,.2f} vs {ema200_f:,.2f})")
     lines.append("")
 
     lines.append(f"*Regime: {regime.value}*")
@@ -426,16 +484,16 @@ async def _debug_asset(pipeline, asset) -> str:
 
     c_not_panic = regime != MarketRegime.PANIC
     c_balance_ok = 955 < balance < 1110
-    c_above_ema200 = safety.current_price > ema200 if ema200 > 0 else False
+    c_above_ema200 = safety.current_price > ema200_f if ema200_f > 0 else False
     c_candle_conf = prev_close > prev_ema50 if prev_close and prev_ema50 else False
-    c_no_spike = abs(p_short) <= 0.08
+    c_no_spike = abs(p_short_f) <= 0.08
     c_max_pos = len([p for p in open_pos if p.get("status") == "open"]) < settings.max_open_positions
 
     lines.append(f"  Not PANIC          {check(c_not_panic)}")
     lines.append(f"  Balance 955-1110   {check(c_balance_ok)}  (${balance:.2f})")
     lines.append(f"  Price > EMA200     {check(c_above_ema200)}")
     lines.append(f"  Candle confirm     {check(c_candle_conf)}  (prev close {prev_close:,.2f} vs prev EMA50 {prev_ema50:,.2f})")
-    lines.append(f"  No spike (≤8%)     {check(c_no_spike)}  ({p_short:+.2%})")
+    lines.append(f"  No spike (≤8%)     {check(c_no_spike)}  ({p_short_f:+.2%})")
     lines.append(f"  Open positions <{settings.max_open_positions}  {check(c_max_pos)}  ({len(existing)} for this asset)")
 
     engine = StrategyEngine()
