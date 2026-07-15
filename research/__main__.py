@@ -20,6 +20,7 @@ def main():
         print("  run_backtest     Run historical backtest")
         print("  run_walk_forward Run walk-forward evaluation")
         print("  generate_report  Generate comprehensive report")
+        print("  run_full_study   Run complete study (fetch+validate+backtest+report)")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -35,6 +36,8 @@ def main():
         from research.run_walk_forward import main as cmd
     elif command == "generate_report":
         from research.generate_report import main as cmd
+    elif command == "run_full_study":
+        from research.run_full_study import main as cmd
     else:
         print(f"Unknown command: {command}")
         sys.exit(1)

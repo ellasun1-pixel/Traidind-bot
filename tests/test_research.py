@@ -5,7 +5,7 @@ import json
 import math
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock, MagicMock
 
 import numpy as np
 import pandas as pd
@@ -18,6 +18,9 @@ from research.ingest import from_csv, from_json, from_kraken_json, from_coinbase
 from research.validate_data import validate, ValidationReport
 from research.backtest_engine import (
     HistoricalBacktester, ExecutionConfig, BacktestResult,
+)
+from research.fetch_data import (
+    _exclude_incomplete_candle, _deduplicate,
 )
 from research.metrics import compute_metrics
 from research.challenge_sim import run_challenge_simulation
@@ -401,3 +404,163 @@ class TestSaveLoadRoundtrip:
         save_data(df, path)
         loaded = load_data(path)
         assert len(loaded) == 10
+
+
+class TestOverlapDeduplication:
+    def test_make_canonical_deduplicates(self):
+        """Duplicate (asset, timestamp) rows are collapsed to one."""
+        records = [
+            {"asset": "BTC/USD", "timestamp": "2024-01-01T00:00:00+00:00",
+             "open": 100, "high": 110, "low": 90, "close": 105, "volume": 1000, "source": "a"},
+            {"asset": "BTC/USD", "timestamp": "2024-01-01T00:00:00+00:00",
+             "open": 101, "high": 111, "low": 91, "close": 106, "volume": 1001, "source": "b"},
+            {"asset": "BTC/USD", "timestamp": "2024-01-02T00:00:00+00:00",
+             "open": 106, "high": 115, "low": 100, "close": 110, "volume": 2000, "source": "a"},
+        ]
+        df = make_canonical(pd.DataFrame(records))
+        assert len(df) == 2
+        assert df.iloc[0]["close"] == 106
+        assert df.iloc[0]["source"] == "b"
+
+    def test_deduplicate_helper(self):
+        df = pd.DataFrame({
+            "asset": ["X", "X", "X"],
+            "timestamp": pd.to_datetime(["2024-01-01", "2024-01-01", "2024-01-02"], utc=True),
+            "open": [1, 2, 3], "high": [1, 2, 3], "low": [1, 2, 3],
+            "close": [1, 2, 3], "volume": [1, 2, 3], "source": ["a", "b", "a"],
+        })
+        result = _deduplicate(df)
+        assert len(result) == 2
+
+    def test_coinbase_boundary_candles_deduplicated(self):
+        """Simulate two Coinbase pages where the boundary candle appears in both."""
+        page1 = [
+            [1704067200, 42100.0, 43200.0, 42500.0, 42800.0, 15000.5],
+            [1704153600, 42600.0, 43500.0, 42800.0, 43100.0, 12000.3],
+        ]
+        page2 = [
+            [1704153600, 42600.0, 43500.0, 42800.0, 43100.0, 12000.3],
+            [1704240000, 43000.0, 44000.0, 43100.0, 43500.0, 11000.0],
+        ]
+        df1 = from_coinbase_json(page1, "BTC/USD")
+        df2 = from_coinbase_json(page2, "BTC/USD")
+        combined = make_canonical(pd.concat([df1, df2], ignore_index=True))
+        assert len(combined) == 3
+
+
+class TestIncompleteCandle:
+    def test_exclude_todays_candle(self):
+        """The current (incomplete) daily candle is dropped."""
+        today = pd.Timestamp.now(tz="UTC").normalize()
+        yesterday = today - timedelta(days=1)
+        df = pd.DataFrame({
+            "asset": ["BTC/USD", "BTC/USD"],
+            "timestamp": [yesterday, today],
+            "open": [100, 200], "high": [110, 210], "low": [90, 190],
+            "close": [105, 205], "volume": [1000, 2000], "source": ["k", "k"],
+        })
+        result = _exclude_incomplete_candle(df)
+        assert len(result) == 1
+        assert result.iloc[0]["close"] == 105
+
+    def test_exclude_preserves_completed_candles(self):
+        """Completed candles (before today) are all preserved."""
+        df = _make_ohlcv(n_days=10, start_date=datetime(2023, 6, 1, tzinfo=timezone.utc))
+        result = _exclude_incomplete_candle(df)
+        assert len(result) == 10
+
+
+class TestKrakenPagination:
+    def test_kraken_pagination_concatenates_pages(self):
+        """Kraken fetcher should loop when response has max candles."""
+        page1_rows = []
+        for i in range(720):
+            ts = 1704067200 + i * 86400
+            page1_rows.append([ts, "100", "110", "90", "105", "0", "1000", 1])
+
+        page2_rows = []
+        for i in range(100):
+            ts = 1704067200 + (720 + i) * 86400
+            page2_rows.append([ts, "100", "110", "90", "105", "0", "1000", 1])
+
+        page1_response = {
+            "error": [],
+            "result": {
+                "XXBTZUSD": page1_rows,
+                "last": page1_rows[-1][0],
+            }
+        }
+        page2_response = {
+            "error": [],
+            "result": {
+                "XXBTZUSD": page2_rows,
+                "last": page2_rows[-1][0],
+            }
+        }
+
+        df1 = from_kraken_json(page1_response, "BTC/USD")
+        df2 = from_kraken_json(page2_response, "BTC/USD")
+        combined = make_canonical(pd.concat([df1, df2], ignore_index=True))
+
+        assert len(combined) == 820
+        diffs = combined["timestamp"].diff().dropna()
+        assert (diffs == timedelta(days=1)).all()
+
+    def test_kraken_overlap_between_pages_deduplicated(self):
+        """If Kraken returns the last candle of page 1 again in page 2, it's deduplicated."""
+        shared_ts = 1704067200 + 719 * 86400
+        page1_rows = []
+        for i in range(720):
+            ts = 1704067200 + i * 86400
+            page1_rows.append([ts, "100", "110", "90", "105", "0", "1000", 1])
+
+        page2_rows = [
+            [shared_ts, "100", "110", "90", "105", "0", "1000", 1],
+            [shared_ts + 86400, "106", "115", "95", "110", "0", "1200", 1],
+        ]
+
+        df1 = from_kraken_json({"error": [], "result": {"XXBTZUSD": page1_rows, "last": shared_ts}}, "BTC/USD")
+        df2 = from_kraken_json({"error": [], "result": {"XXBTZUSD": page2_rows, "last": shared_ts + 86400}}, "BTC/USD")
+        combined = make_canonical(pd.concat([df1, df2], ignore_index=True))
+
+        assert len(combined) == 721
+
+
+class TestProviderLimitedResponses:
+    def test_short_data_detected_by_validation(self):
+        """If a provider returns fewer candles than warm-up requires, validation catches it."""
+        df = _make_ohlcv(n_days=200)
+        report = validate(df)
+        assert not report.passed
+        assert any("252" in e for e in report.errors)
+
+    def test_backtest_rejects_insufficient_data(self):
+        """Backtester raises ValueError if data is shorter than warmup."""
+        df = _make_ohlcv(n_days=200)
+        bt = HistoricalBacktester(strategy="conservative")
+        with pytest.raises(ValueError, match="Need >"):
+            bt.run("BTC/USD", df)
+
+    def test_chronological_after_pagination(self):
+        """After multi-page concatenation, data is chronologically sorted."""
+        page_a = _make_ohlcv(n_days=5, start_date=datetime(2024, 6, 1, tzinfo=timezone.utc), seed=1)
+        page_b = _make_ohlcv(n_days=5, start_date=datetime(2024, 1, 1, tzinfo=timezone.utc), seed=2)
+        combined = make_canonical(pd.concat([page_a, page_b], ignore_index=True))
+
+        diffs = combined["timestamp"].diff().dropna()
+        assert (diffs > timedelta(0)).all(), "Data must be chronologically sorted"
+
+
+class TestRunFullStudySafety:
+    def test_run_full_study_has_no_trading_imports(self):
+        """run_full_study must not import trading, telegram, or scheduler modules."""
+        source = Path("research/run_full_study.py").read_text()
+        assert "telegram" not in source.lower()
+        assert "scheduler" not in source.lower()
+        assert "LIVE_TRADING" not in source
+        assert "place_order" not in source
+        assert "submit_order" not in source
+
+    def test_run_full_study_module_importable(self):
+        import research.run_full_study
+        assert hasattr(research.run_full_study, "main")

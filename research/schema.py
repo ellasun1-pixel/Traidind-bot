@@ -30,6 +30,7 @@ def make_canonical(df: pd.DataFrame) -> pd.DataFrame:
     df["asset"] = df["asset"].astype(str)
     df["source"] = df["source"].astype(str)
     df = df.sort_values("timestamp").reset_index(drop=True)
+    df = df.drop_duplicates(subset=["asset", "timestamp"], keep="last").reset_index(drop=True)
     return df
 
 
