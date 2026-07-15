@@ -15,6 +15,8 @@ from src.scheduler.jobs import get_portfolio, get_last_signals
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session, AuditLog
 from src.auth.owner import owner_only, validate_auth_config
+from src.auth.permissions import Permission, get_user_permissions
+from src.database.session import check_db_health
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/pause — Pause signal generation\n"
         "/resume — Resume signal generation\n"
         "/settings — View/toggle settings\n"
+        "/auth — Authentication diagnostics\n"
         "/help — Show this message"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -240,6 +243,30 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+@owner_only
+async def cmd_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat = update.effective_chat
+    user_perms = get_user_permissions(user.id)
+    db_health = check_db_health()
+    env = settings.app_env
+
+    perm_lines = "\n".join(f"  {p.value}" for p in Permission if p in user_perms)
+
+    text = (
+        "\U0001f510 *Authentication Status*\n\n"
+        f"Owner: Authorized\n"
+        f"Telegram User ID: `{user.id}`\n"
+        f"Chat ID: `{chat.id}`\n"
+        f"Environment: {env.capitalize()}\n\n"
+        f"*Permissions:*\n{perm_lines}\n\n"
+        f"Database: {'Connected' if db_health['status'] == 'ok' else 'Error'}\n"
+        f"Bot: Running\n"
+        f"Strategy Version: {settings.strategy_version}"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
 def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
@@ -260,5 +287,6 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("pause", cmd_pause))
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(CommandHandler("auth", cmd_auth))
 
     return app
