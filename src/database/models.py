@@ -65,8 +65,8 @@ class Signal(Base):
     id = Column(String(36), primary_key=True, default=_genuuid)
     asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
     strategy_version = Column(String(20), nullable=False, default="1.0")
-    signal_type = Column(String(10), nullable=False)
-    priority = Column(String(10), nullable=False)
+    signal_type = Column(String(20), nullable=False)
+    priority = Column(String(10), nullable=False, default="normal")
     regime = Column(String(20), nullable=False)
     entry_price = Column(Numeric(18, 8))
     stop_loss = Column(Numeric(18, 8))
@@ -77,6 +77,8 @@ class Signal(Base):
     cancel_level = Column(Numeric(18, 8))
     reason = Column(Text)
     explanation = Column(Text)
+    confidence = Column(Numeric(5, 4))
+    market_snapshot = Column(JSON)
     price_range_low = Column(Numeric(18, 8))
     price_range_high = Column(Numeric(18, 8))
     price_tolerance_pct = Column(Numeric(6, 4), default=0.02)
@@ -86,10 +88,16 @@ class Signal(Base):
     confirmed_at = Column(DateTime(timezone=True))
     rejected_at = Column(DateTime(timezone=True))
     executed_at = Column(DateTime(timezone=True))
+    cancelled_at = Column(DateTime(timezone=True))
+    superseded_at = Column(DateTime(timezone=True))
     owner_user_id = Column(Integer)
+    owner_decision_note = Column(Text)
+    previous_signal_id = Column(String(36), ForeignKey("signals.id"))
+    superseded_reason = Column(Text)
 
     asset = relationship("Asset", back_populates="signals")
     position = relationship("PaperPosition", back_populates="signal", uselist=False)
+    previous_signal = relationship("Signal", remote_side=[id], foreign_keys=[previous_signal_id])
 
 
 class PaperAccount(Base):
