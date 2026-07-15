@@ -5,7 +5,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 
 from src.database.models import Base
@@ -114,6 +114,24 @@ REQUIRED_TABLES = [
 ]
 
 
+def _run_alembic_migrations(database_url: str) -> None:
+    from alembic.config import Config
+    from alembic import command
+
+    alembic_dir = Path(__file__).resolve().parent.parent.parent / "alembic"
+    ini_path = alembic_dir.parent / "alembic.ini"
+
+    if not ini_path.exists():
+        raise RuntimeError(f"alembic.ini not found at {ini_path}")
+
+    cfg = Config(str(ini_path))
+    cfg.set_main_option("sqlalchemy.url", database_url)
+
+    logger.info("Running alembic upgrade head...")
+    command.upgrade(cfg, "head")
+    logger.info("Alembic migrations applied successfully")
+
+
 def init_db(engine=None):
     eng = engine or get_engine()
     url = str(eng.url)
@@ -123,22 +141,17 @@ def init_db(engine=None):
         Base.metadata.create_all(eng)
         logger.info("SQLite tables created via metadata (dev mode)")
     else:
+        _run_alembic_migrations(_get_database_url())
         missing = _check_required_tables(eng)
         if missing:
-            logger.error(
-                "PostgreSQL is missing required tables: %s. "
-                "Run 'alembic upgrade head' before starting the application.",
-                ", ".join(missing),
-            )
             raise RuntimeError(
-                f"Database schema incomplete — missing tables: {', '.join(missing)}. "
-                f"Run 'alembic upgrade head' first."
+                f"Database schema incomplete after running migrations — "
+                f"missing tables: {', '.join(missing)}"
             )
         logger.info("PostgreSQL schema verified — all %d required tables present", len(REQUIRED_TABLES))
 
 
 def _check_required_tables(engine) -> list[str]:
-    from sqlalchemy import inspect
     inspector = inspect(engine)
     existing = set(inspector.get_table_names())
     return [t for t in REQUIRED_TABLES if t not in existing]
