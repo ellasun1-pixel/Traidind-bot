@@ -11,13 +11,16 @@ from telegram.ext import (
 )
 
 from src.config import settings, AgentMode
-from src.scheduler.jobs import get_portfolio, get_last_signals, get_scheduler_status
+from src.scheduler.jobs import get_portfolio, get_last_signals, get_scheduler_status, get_pipeline
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session, AuditLog
 from src.auth.owner import owner_only, validate_auth_config
 from src.auth.permissions import Permission, get_user_permissions
 from src.database.session import check_db_health
 from src.health.service import get_health_service
+from src.strategy.indicators import compute_indicators
+from src.strategy.regime import classify_regime, MarketRegime
+from src.strategy.engine import StrategyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +64,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/auth — Authentication diagnostics\n"
         "/scheduler — Job execution status\n"
         "/health — Operational health dashboard\n"
+        "/debug — Regime diagnostics (all or /debug BTC)\n"
         "/help — Show this message"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -300,6 +304,152 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+ASSET_ALIASES = {
+    "BTC": "BTC/USD", "ETH": "ETH/USD", "XRP": "XRP/USD",
+    "LINK": "LINK/USD", "LTC": "LTC/USD",
+}
+
+
+@owner_only
+async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if args:
+        query = args[0].upper()
+        symbol = ASSET_ALIASES.get(query, query if "/" in query else None)
+        if symbol:
+            targets = [a for a in settings.assets if a.symbol == symbol]
+        else:
+            await update.message.reply_text(
+                f"Unknown asset: {query}\nUse: BTC, ETH, XRP, LINK, LTC",
+            )
+            return
+    else:
+        targets = list(settings.assets)
+
+    pipeline = get_pipeline()
+
+    for asset in targets:
+        text = await _debug_asset(pipeline, asset)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def _debug_asset(pipeline, asset) -> str:
+    from src.market_data.pipeline import _candles_to_dataframe
+
+    lines = [f"\U0001f50d *{asset.symbol}*", ""]
+
+    safety = await pipeline.get_analysis_ready_data(asset)
+
+    if not safety.safe:
+        lines.append(f"Provider: {safety.provider_used}")
+        lines.append(f"Status: DATA UNAVAILABLE")
+        lines.append(f"Reason: {safety.reason}")
+        return "\n".join(lines)
+
+    lines.append(f"Provider: {safety.provider_used}")
+    lines.append(f"Price: ${safety.current_price:,.2f}")
+    lines.append("")
+
+    enriched = compute_indicators(safety.daily_df)
+    latest = enriched.iloc[-1]
+    prev = enriched.iloc[-2] if len(enriched) > 1 else latest
+
+    ema50 = float(latest.get("ema50", 0) or 0)
+    ema200 = float(latest.get("ema200", 0) or 0)
+    er20 = float(latest.get("er20", 0) or 0)
+    adx14 = float(latest.get("adx14", 0) or 0)
+    rvol = float(latest.get("rvol", 0) or 0)
+    rvol_median = float(latest.get("rvol_median_252", 0) or 0)
+    rvol_pct25 = float(latest.get("rvol_pct25", 0) or 0)
+    p48h = float(latest.get("price_change_48h", 0) or 0)
+    p_short = float(latest.get("price_change_short", 0) or 0)
+    close = float(latest.get("close", 0))
+    candle_ts = latest.get("open_time", "?")
+    prev_close = float(prev.get("close", 0))
+    prev_ema50 = float(prev.get("ema50", 0) or 0)
+
+    lines.append("*Indicators*")
+    lines.append(f"EMA50: {ema50:,.2f}")
+    lines.append(f"EMA200: {ema200:,.2f}")
+    lines.append(f"ER20: {er20:.4f}")
+    lines.append(f"ADX14: {adx14:.1f}")
+    lines.append(f"RVol: {rvol:.4f}  (med: {rvol_median:.4f})")
+    lines.append(f"48h change: {p48h:+.2%}")
+    lines.append(f"Candles: {len(enriched)}  |  Latest: {candle_ts}")
+    lines.append("")
+
+    def check(ok): return "✅" if ok else "❌"
+
+    regime = classify_regime(latest)
+
+    lines.append("*PANIC conditions*")
+    c_panic_drop = p48h <= -0.10
+    c_panic_vol = rvol_median > 0 and rvol > 1.8 * rvol_median
+    lines.append(f"  48h drop ≤ -10%    {check(c_panic_drop)}  ({p48h:+.2%})")
+    lines.append(f"  RVol > 1.8×median  {check(c_panic_vol)}  ({rvol:.4f} vs {1.8*rvol_median:.4f})")
+    lines.append("")
+
+    lines.append("*LOWVOL conditions*")
+    c_lv_vol = rvol_pct25 > 0 and rvol <= rvol_pct25
+    c_lv_er = er20 < 0.35
+    lines.append(f"  RVol ≤ pct25       {check(c_lv_vol)}  ({rvol:.4f} vs {rvol_pct25:.4f})")
+    lines.append(f"  ER20 < 0.35        {check(c_lv_er)}  ({er20:.4f})")
+    lines.append("")
+
+    lines.append("*TREND conditions*")
+    c_tr_er = er20 >= 0.35
+    c_tr_price = close > ema200
+    c_tr_ema = ema50 > ema200
+    lines.append(f"  ER20 ≥ 0.35        {check(c_tr_er)}  ({er20:.4f})")
+    lines.append(f"  Price > EMA200     {check(c_tr_price)}  ({close:,.2f} vs {ema200:,.2f})")
+    lines.append(f"  EMA50 > EMA200     {check(c_tr_ema)}  ({ema50:,.2f} vs {ema200:,.2f})")
+    lines.append("")
+
+    lines.append(f"*Regime: {regime.value}*")
+
+    if regime == MarketRegime.CHOP:
+        failing = []
+        if not c_tr_er:
+            failing.append("ER20 below 0.35")
+        if not c_tr_price:
+            failing.append("Price below EMA200")
+        if not c_tr_ema:
+            failing.append("EMA50 below EMA200")
+        lines.append(f"TREND blocked by: {', '.join(failing)}")
+
+    lines.append("")
+    lines.append("*BUY gate checks*")
+    portfolio = get_portfolio()
+    balance = portfolio.balance_usd
+    open_pos = portfolio.get_open_positions()
+    existing = [p for p in open_pos if p.get("symbol") == asset.symbol]
+
+    c_not_panic = regime != MarketRegime.PANIC
+    c_balance_ok = 955 < balance < 1110
+    c_above_ema200 = safety.current_price > ema200 if ema200 > 0 else False
+    c_candle_conf = prev_close > prev_ema50 if prev_close and prev_ema50 else False
+    c_no_spike = abs(p_short) <= 0.08
+    c_max_pos = len([p for p in open_pos if p.get("status") == "open"]) < settings.max_open_positions
+
+    lines.append(f"  Not PANIC          {check(c_not_panic)}")
+    lines.append(f"  Balance 955-1110   {check(c_balance_ok)}  (${balance:.2f})")
+    lines.append(f"  Price > EMA200     {check(c_above_ema200)}")
+    lines.append(f"  Candle confirm     {check(c_candle_conf)}  (prev close {prev_close:,.2f} vs prev EMA50 {prev_ema50:,.2f})")
+    lines.append(f"  No spike (≤8%)     {check(c_no_spike)}  ({p_short:+.2%})")
+    lines.append(f"  Open positions <{settings.max_open_positions}  {check(c_max_pos)}  ({len(existing)} for this asset)")
+
+    engine = StrategyEngine()
+    signal = engine.analyze(
+        asset.symbol, safety.daily_df, safety.daily_df, safety.current_price,
+        balance, open_pos, portfolio.get_total_open_risk(),
+    )
+    lines.append("")
+    lines.append(f"*Signal: {signal.signal_type}*")
+    lines.append(f"Reason: {signal.reason}")
+
+    return "\n".join(lines)
+
+
 def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
@@ -323,5 +473,6 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("auth", cmd_auth))
     app.add_handler(CommandHandler("scheduler", cmd_scheduler))
     app.add_handler(CommandHandler("health", cmd_health))
+    app.add_handler(CommandHandler("debug", cmd_debug))
 
     return app
