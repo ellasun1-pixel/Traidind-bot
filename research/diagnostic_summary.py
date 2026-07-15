@@ -113,7 +113,7 @@ def main():
     print(f"TP={settings.take_profit_risk_multiple} Risk={settings.risk_per_trade_pct_default} Spike={settings.vertical_spike_pct} MaxPos={settings.max_open_positions}")
     print()
 
-    total_killed = {"regime": 0, "ema200": 0, "confirm": 0, "spike": 0}
+    total_killed = {"regime": 0, "confirm": 0, "spike": 0}
 
     for asset_name in ASSETS:
         safe = asset_name.replace("/", "_")
@@ -146,7 +146,7 @@ def main():
     print()
     print(f"=== TOTAL KILLS ACROSS ALL ASSETS/PERIODS ===")
     total = sum(total_killed.values())
-    for key in ["regime", "ema200", "confirm", "spike"]:
+    for key in ["regime", "confirm", "spike"]:
         v = total_killed[key]
         pct = v / total * 100 if total > 0 else 0
         print(f"  {key:10s}: {v:5d} ({pct:5.1f}%)")
