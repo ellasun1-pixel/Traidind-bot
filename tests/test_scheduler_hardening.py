@@ -713,12 +713,12 @@ class TestStartupSweep:
 # ──────────────────────────────────────────────
 
 class TestSchedulerSetup:
-    def test_setup_creates_five_jobs(self):
+    def test_setup_creates_six_jobs(self):
         from src.scheduler.jobs import setup_scheduler
         scheduler = setup_scheduler()
         jobs = scheduler.get_jobs()
         job_ids = {j.id for j in jobs}
-        expected = {"market_check", "expire_signals", "morning_report", "evening_report", "health_heartbeat"}
+        expected = {"market_check", "expire_signals", "morning_report", "evening_report", "health_heartbeat", "health_check"}
         assert expected == job_ids
 
     def test_misfire_grace_time_set(self):

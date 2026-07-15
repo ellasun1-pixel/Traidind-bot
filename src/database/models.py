@@ -225,6 +225,19 @@ class MarketDataMeta(Base):
     )
 
 
+class HealthTransition(Base):
+    __tablename__ = "health_transitions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    component = Column(String(30), nullable=False)
+    old_status = Column(String(15), nullable=False)
+    new_status = Column(String(15), nullable=False)
+    reason = Column(Text)
+    recovered_at = Column(DateTime(timezone=True))
+    recovery_seconds = Column(Integer)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
 class DailySnapshot(Base):
     __tablename__ = "daily_snapshots"
 

@@ -11,7 +11,7 @@ from src.database.models import (
     Asset, Signal, PaperAccount, PaperPosition,
     TradeHistory, AppSetting, AuditLog, AlertHistory,
     SchedulerState, MarketDataMeta, DailySnapshot,
-    PriceHistory,
+    PriceHistory, HealthTransition,
 )
 
 logger = logging.getLogger(__name__)
@@ -469,3 +469,49 @@ class MarketDataMetaRepository:
         self.session.add(meta)
         self.session.flush()
         return meta
+
+
+class HealthTransitionRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def record(self, component: str, old_status: str, new_status: str,
+               reason: str = None) -> HealthTransition:
+        entry = HealthTransition(
+            component=component,
+            old_status=old_status,
+            new_status=new_status,
+            reason=reason,
+        )
+        self.session.add(entry)
+        self.session.flush()
+        return entry
+
+    def get_latest_for_component(self, component: str) -> Optional[HealthTransition]:
+        return (
+            self.session.query(HealthTransition)
+            .filter(HealthTransition.component == component)
+            .order_by(HealthTransition.created_at.desc())
+            .first()
+        )
+
+    def mark_recovery(self, component: str) -> Optional[HealthTransition]:
+        latest = self.get_latest_for_component(component)
+        if latest and latest.recovered_at is None and latest.new_status != "HEALTHY":
+            now = datetime.now(timezone.utc)
+            latest.recovered_at = now
+            created = latest.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            latest.recovery_seconds = int((now - created).total_seconds())
+            self.session.flush()
+            return latest
+        return None
+
+    def get_recent(self, limit: int = 50) -> list[HealthTransition]:
+        return (
+            self.session.query(HealthTransition)
+            .order_by(HealthTransition.created_at.desc())
+            .limit(limit)
+            .all()
+        )

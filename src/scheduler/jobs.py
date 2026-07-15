@@ -23,6 +23,7 @@ from src.database.repository import (
     AppSettingRepository,
 )
 from src.signals.lifecycle import SignalLifecycle, SignalType
+from src.health.service import get_health_service
 
 logger = logging.getLogger(__name__)
 
@@ -501,6 +502,28 @@ async def health_heartbeat_job():
         logger.error("health_heartbeat failed: %s", e, exc_info=True)
 
 
+async def health_check_job():
+    job_name = "health_check"
+    start_time = time.monotonic()
+    try:
+        service = get_health_service()
+        system = service.run_check_and_record()
+        await service.notify_if_needed(system)
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        with get_session() as session:
+            sched_repo = SchedulerStateRepository(session)
+            sched_repo.mark_success(job_name, duration_ms=duration_ms)
+
+        logger.debug("Health check: %s", system.status.value)
+    except Exception as e:
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        with get_session() as session:
+            sched_repo = SchedulerStateRepository(session)
+            sched_repo.mark_failure(job_name, str(e), duration_ms=duration_ms)
+        logger.error("health_check failed: %s", e, exc_info=True)
+
+
 async def startup_sweep():
     logger.info("Running startup sweep...")
     try:
@@ -566,6 +589,14 @@ def setup_scheduler() -> AsyncIOScheduler:
         id="health_heartbeat",
         replace_existing=True,
         misfire_grace_time=60,
+    )
+
+    scheduler.add_job(
+        health_check_job,
+        IntervalTrigger(minutes=1),
+        id="health_check",
+        replace_existing=True,
+        misfire_grace_time=30,
     )
 
     return scheduler

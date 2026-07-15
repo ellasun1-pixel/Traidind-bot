@@ -17,6 +17,7 @@ from src.database import get_session, AuditLog
 from src.auth.owner import owner_only, validate_auth_config
 from src.auth.permissions import Permission, get_user_permissions
 from src.database.session import check_db_health
+from src.health.service import get_health_service
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/settings — View/toggle settings\n"
         "/auth — Authentication diagnostics\n"
         "/scheduler — Job execution status\n"
+        "/health — Operational health dashboard\n"
         "/help — Show this message"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -295,6 +297,14 @@ async def cmd_scheduler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+@owner_only
+async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    service = get_health_service()
+    system = service.check_all()
+    text = service.format_health_command(system)
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
 def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
@@ -317,5 +327,6 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("auth", cmd_auth))
     app.add_handler(CommandHandler("scheduler", cmd_scheduler))
+    app.add_handler(CommandHandler("health", cmd_health))
 
     return app

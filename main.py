@@ -72,28 +72,44 @@ def run_bot():
         setup_scheduler, set_send_message_func, startup_sweep, market_check_job,
     )
     from src.auth.owner import validate_auth_config
+    from src.health.service import get_health_service
 
-    logger.info("Starting bot — validating environment...")
+    logger.info("=== STARTUP DIAGNOSTICS ===")
+
+    logger.info("[1/8] Environment: %s", settings.app_env)
+    logger.info("[1/8] Live trading: %s", settings.live_trading_enabled)
+    if settings.live_trading_enabled:
+        logger.error("LIVE_TRADING_ENABLED=true — aborting for safety")
+        sys.exit(1)
 
     start_health_server()
+    logger.info("[2/8] Health server started")
 
     db_health = check_db_health()
     if db_health["status"] != "ok":
-        logger.error("Database unreachable: %s", db_health.get("error", "unknown"))
+        logger.error("[3/8] Database FAILED: %s", db_health.get("error", "unknown"))
         sys.exit(1)
-    logger.info("Database connection verified (%s)", db_health["backend"])
+    logger.info("[3/8] Database: Connected (%s)", db_health["backend"])
 
     init_db()
-    logger.info("Database initialized")
+    logger.info("[4/8] Migrations: Applied")
 
-    validate_auth_config()
-    logger.info("Authentication configuration validated")
+    try:
+        validate_auth_config()
+        logger.info("[5/8] Authentication: Validated")
+    except Exception as e:
+        logger.error("[5/8] Authentication FAILED: %s", e)
+        sys.exit(1)
 
     app = create_bot()
-    logger.info("Telegram bot created")
+    logger.info("[6/8] Telegram bot: Created")
 
     scheduler = setup_scheduler()
-    logger.info("Scheduler initialized")
+    logger.info("[7/8] Scheduler: Initialized (6 jobs)")
+
+    logger.info("[8/8] Configuration: %d assets, %d min interval, strategy v%s",
+                len(settings.assets), settings.check_interval_minutes,
+                settings.strategy_version)
 
     async def send_to_chat(text: str):
         try:
@@ -106,6 +122,9 @@ def run_bot():
 
     set_send_message_func(send_to_chat)
 
+    health_service = get_health_service()
+    health_service.set_send_message_func(send_to_chat)
+
     async def post_init(application):
         await startup_sweep()
 
@@ -113,10 +132,9 @@ def run_bot():
         logger.info("Scheduler started (market check every %d min)", settings.check_interval_minutes)
         logger.info("Agent mode: %s", settings.agent_mode.value)
         logger.info("Active assets: %s", ", ".join(a.symbol for a in settings.assets))
-        logger.info("Live trading: %s", settings.live_trading_enabled)
 
         set_app_ready(True)
-        logger.info("Application fully initialized — readiness gate open")
+        logger.info("=== STARTUP COMPLETE — readiness gate open ===")
 
         try:
             await market_check_job()
