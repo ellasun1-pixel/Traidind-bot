@@ -102,6 +102,12 @@ class StrategyEngine:
 
         for pos in existing:
             stop_loss = pos.get("stop_loss", 0)
+            entry = pos.get("entry_price", 0)
+            risk_per_unit = pos.get("risk_per_unit", 0)
+            if entry > 0 and risk_per_unit > 0:
+                breakeven_threshold = entry + risk_per_unit * 1.5
+                if current_price >= breakeven_threshold:
+                    stop_loss = max(stop_loss, entry)
             if stop_loss and current_price <= stop_loss:
                 return TradeSignal(
                     signal_type="SELL",
