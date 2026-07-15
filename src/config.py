@@ -32,9 +32,16 @@ class AssetConfig(BaseModel):
 
 class AppSettings(BaseSettings):
     telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_owner_ids: str = ""
+    telegram_chat_ids: str = ""
     agent_mode: AgentMode = AgentMode.PAPER_CHALLENGE
     beginner_explanations: bool = True
     database_url: str = f"sqlite:///{BASE_DIR / 'data' / 'challenge.db'}"
+
+    signal_expiry_minutes: int = 30
+    strategy_version: str = "1.0"
+    live_trading_enabled: bool = False
 
     starting_balance: float = 1000.0
     win_level: float = 1120.0

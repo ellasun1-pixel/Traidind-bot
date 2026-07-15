@@ -13,7 +13,7 @@ from telegram.ext import (
 from src.config import settings, AgentMode
 from src.scheduler.jobs import get_portfolio, get_last_signals
 from src.notifier.formatter import SignalFormatter
-from src.database import get_session, Signal, AuditLog
+from src.database import get_session, AuditLog
 
 logger = logging.getLogger(__name__)
 
@@ -154,10 +154,8 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
 
     try:
-        session = get_session()
-        session.add(AuditLog(event_type="CONFIRM", details={"results": results}))
-        session.commit()
-        session.close()
+        with get_session() as session:
+            session.add(AuditLog(action="CONFIRM", actor="owner", detail={"results": results}))
     except Exception:
         pass
 

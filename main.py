@@ -40,11 +40,17 @@ def start_health_server():
 
 def run_bot():
     from src.config import settings
-    from src.database import init_db
+    from src.database import init_db, check_db_health
     from src.telegram_bot.bot import create_bot
     from src.scheduler.jobs import setup_scheduler, set_send_message_func
 
     start_health_server()
+
+    db_health = check_db_health()
+    if db_health["status"] != "ok":
+        logger.error("Database unreachable: %s", db_health.get("error", "unknown"))
+        sys.exit(1)
+    logger.info("Database connection verified (%s)", db_health["backend"])
 
     init_db()
     logger.info("Database initialized")
