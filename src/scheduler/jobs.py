@@ -107,10 +107,24 @@ def _persist_market_meta(session, asset_id: int, fetch_result, provider: str) ->
     )
 
 
-def _has_pending_signal_for_asset(session, asset_id: int) -> bool:
-    lifecycle = SignalLifecycle(session)
-    pending = lifecycle.get_pending_for_asset(asset_id)
-    return len(pending) > 0
+def _is_signal_equivalent(existing: object, new_signal: TradeSignal) -> bool:
+    if existing.signal_type != new_signal.signal_type:
+        return False
+    if existing.entry_price is not None and new_signal.entry_price:
+        price_diff = abs(float(existing.entry_price) - new_signal.entry_price)
+        if new_signal.entry_price > 0:
+            if price_diff / new_signal.entry_price > 0.02:
+                return False
+    if existing.stop_loss is not None and new_signal.stop_loss:
+        sl_diff = abs(float(existing.stop_loss) - new_signal.stop_loss)
+        if new_signal.stop_loss > 0:
+            if sl_diff / new_signal.stop_loss > 0.02:
+                return False
+    existing_priority = existing.priority if hasattr(existing, "priority") else ""
+    new_priority = new_signal.priority.lower() if new_signal.priority else "normal"
+    if existing_priority != new_priority:
+        return False
+    return True
 
 
 def _resolve_asset_id(session, symbol: str) -> int | None:
@@ -134,17 +148,18 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
         "candles_persisted": 0,
     }
 
-    safety = await pipeline.get_analysis_ready_data(asset)
+    fetch_result = await pipeline.fetch_validated_candles(asset, "1d")
 
     with get_session() as session:
         asset_id = _resolve_asset_id(session, asset.symbol)
-
         if asset_id is not None:
-            fetch_result = await pipeline.fetch_validated_candles(asset, "1d")
-            result["candles_persisted"] = _persist_candles(
-                session, asset_id, fetch_result, fetch_result.provider_used,
-            )
             _persist_market_meta(session, asset_id, fetch_result, fetch_result.provider_used)
+            if fetch_result.validation.valid:
+                result["candles_persisted"] = _persist_candles(
+                    session, asset_id, fetch_result, fetch_result.provider_used,
+                )
+
+    safety = await pipeline.get_analysis_ready_data(asset)
 
     if not safety.safe:
         logger.warning("Data not safe for %s: %s", asset.symbol, safety.reason)
@@ -174,34 +189,50 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
 
     with get_session() as session:
         asset_id = _resolve_asset_id(session, asset.symbol)
-        if asset_id is not None and _has_pending_signal_for_asset(session, asset_id):
-            logger.info("Pending signal already exists for %s, skipping", asset.symbol)
-            result["status"] = "duplicate_suppressed"
+        if asset_id is None:
             return result
 
-    with get_session() as session:
-        asset_id = _resolve_asset_id(session, asset.symbol)
-        if asset_id is not None:
-            lifecycle = SignalLifecycle(session)
-            expires = datetime.now(timezone.utc) + timedelta(minutes=settings.signal_expiry_minutes)
-            lifecycle.create_signal(
-                asset_id=asset_id,
-                signal_type=signal.signal_type,
-                regime=signal.regime.value if hasattr(signal.regime, "value") else str(signal.regime),
-                expires_at=expires,
-                reason=signal.reason,
-                explanation=signal.explanation or "",
-                strategy_version=settings.strategy_version,
-                entry_price=signal.entry_price or None,
-                stop_loss=signal.stop_loss or None,
-                position_size_usd=signal.position_size_usd or None,
-                max_loss_usd=signal.max_loss_usd or None,
-                priority=signal.priority.lower() if signal.priority else "normal",
-                order_type=signal.order_type or None,
-                cancel_level=signal.cancel_level or None,
-                price_range_low=signal.price_range_low or None,
-                price_range_high=signal.price_range_high or None,
+        lifecycle = SignalLifecycle(session)
+        pending = lifecycle.get_pending_for_asset(asset_id)
+
+        regime_val = signal.regime.value if hasattr(signal.regime, "value") else str(signal.regime)
+        expires = datetime.now(timezone.utc) + timedelta(minutes=settings.signal_expiry_minutes)
+        previous_signal_id = None
+
+        if pending:
+            existing = pending[0]
+            if _is_signal_equivalent(existing, signal):
+                logger.info("Equivalent pending signal exists for %s, skipping", asset.symbol)
+                result["status"] = "duplicate_suppressed"
+                return result
+            previous_signal_id = existing.id
+            logger.info(
+                "Materially changed signal for %s: %s -> %s, superseding %s",
+                asset.symbol, existing.signal_type, signal.signal_type, existing.id,
             )
+
+        lifecycle.create_signal(
+            asset_id=asset_id,
+            signal_type=signal.signal_type,
+            regime=regime_val,
+            expires_at=expires,
+            reason=signal.reason,
+            explanation=signal.explanation or "",
+            strategy_version=settings.strategy_version,
+            entry_price=signal.entry_price or None,
+            stop_loss=signal.stop_loss or None,
+            position_size_usd=signal.position_size_usd or None,
+            max_loss_usd=signal.max_loss_usd or None,
+            priority=signal.priority.lower() if signal.priority else "normal",
+            order_type=signal.order_type or None,
+            cancel_level=signal.cancel_level or None,
+            price_range_low=signal.price_range_low or None,
+            price_range_high=signal.price_range_high or None,
+            previous_signal_id=previous_signal_id,
+            supersede_previous=True,
+        )
+        if previous_signal_id:
+            result["status"] = "superseded_previous"
 
     notification_mgr = _notification_mgr or NotificationManager()
     should_send, reason = notification_mgr.should_send(signal)

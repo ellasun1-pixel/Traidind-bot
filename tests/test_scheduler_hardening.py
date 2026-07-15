@@ -1,9 +1,12 @@
 """Iteration 5: Scheduler hardening and production pipeline integration tests."""
 from __future__ import annotations
 
-import asyncio
+import json
 import time
+import threading
 from datetime import datetime, timezone, timedelta
+from io import BytesIO
+from http.client import HTTPConnection
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.database.models import (
     Base, SchedulerState, Asset, PriceHistory, MarketDataMeta,
-    Signal, AppSetting,
+    Signal, AppSetting, AuditLog,
 )
 from src.database.repository import (
     SchedulerStateRepository, PriceHistoryRepository,
@@ -65,6 +68,20 @@ def _make_candles(count=260, asset="BTC"):
     return [_make_candle(asset=asset, day_offset=i, price=50000 + i * 10) for i in range(count)]
 
 
+def _make_session_cm(Session):
+    def make_session():
+        class CM:
+            def __enter__(self_):
+                self_.s = Session()
+                return self_.s
+            def __exit__(self_, *args):
+                self_.s.commit()
+                self_.s.close()
+                return False
+        return CM()
+    return make_session
+
+
 # ──────────────────────────────────────────────
 # Section 1: SchedulerState model expansion
 # ──────────────────────────────────────────────
@@ -92,7 +109,7 @@ class TestSchedulerStateModel:
 
 
 # ──────────────────────────────────────────────
-# Section 2: Job locking
+# Section 2: Job locking (atomic conditional UPDATE)
 # ──────────────────────────────────────────────
 
 class TestJobLocking:
@@ -139,6 +156,28 @@ class TestJobLocking:
         repo.try_acquire_lock("market_check", "w2", lock_duration_seconds=1)
         state = repo.get_or_create("market_check")
         assert state.run_count == 2
+
+    def test_concurrent_lock_two_sessions(self, engine):
+        """Two independent sessions: only one acquires the lock."""
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
+
+        s1 = Session()
+        s2 = Session()
+
+        repo1 = SchedulerStateRepository(s1)
+        repo2 = SchedulerStateRepository(s2)
+
+        a1 = repo1.try_acquire_lock("market_check", "worker-1", lock_duration_seconds=300)
+        s1.commit()
+
+        a2 = repo2.try_acquire_lock("market_check", "worker-2", lock_duration_seconds=300)
+        s2.commit()
+
+        assert a1 is True
+        assert a2 is False
+
+        s1.close()
+        s2.close()
 
 
 # ──────────────────────────────────────────────
@@ -317,6 +356,16 @@ class TestOldFetcherRemoved:
         assert "MarketDataFetcher" not in source
         assert "from src.market_data.fetcher" not in source
 
+    def test_fetcher_file_deleted(self):
+        import os
+        assert not os.path.exists("src/market_data/fetcher.py")
+
+    def test_market_data_init_no_fetcher(self):
+        import src.market_data as md_module
+        source = open(md_module.__file__).read()
+        assert "MarketDataFetcher" not in source
+        assert "fetcher" not in source
+
 
 # ──────────────────────────────────────────────
 # Section 7: Market check job integration
@@ -434,23 +483,14 @@ class TestExpireSignalsJob:
             )
             s.add(sig)
             s.commit()
-            sig_id = sig.id
 
-        with patch("src.scheduler.jobs.get_session") as mock_gs:
-            s = Session()
-            mock_gs.return_value.__enter__ = MagicMock(return_value=s)
-            mock_gs.return_value.__exit__ = MagicMock(side_effect=lambda *a: s.commit() or False)
-
-            from src.scheduler.jobs import expire_signals_job
-            # Can't easily test full flow with locking + separate sessions,
-            # so test the lifecycle directly
+        with Session() as s:
             from src.signals.lifecycle import SignalLifecycle
             lifecycle = SignalLifecycle(s)
             expired = lifecycle.expire_old_signals()
             s.commit()
             assert len(expired) == 1
             assert expired[0].status == "expired"
-            s.close()
 
 
 # ──────────────────────────────────────────────
@@ -478,25 +518,24 @@ class TestReportIdempotency:
 
 
 # ──────────────────────────────────────────────
-# Section 10: Duplicate signal prevention
+# Section 10: Duplicate signal prevention & supersession
 # ──────────────────────────────────────────────
 
-class TestDuplicateSignalPrevention:
-    def test_has_pending_detects_existing(self, session, seed_asset):
+class TestSignalSupersession:
+    def test_pending_detected(self, session, seed_asset):
         sig = Signal(
             asset_id=seed_asset.id, signal_type="BUY", regime="TREND",
             status="pending", strategy_version="1.0", reason="test",
+            priority="medium",
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
         )
         session.add(sig)
         session.commit()
 
-        from src.scheduler.jobs import _has_pending_signal_for_asset
-        with patch("src.scheduler.jobs.get_session"):
-            from src.signals.lifecycle import SignalLifecycle
-            lifecycle = SignalLifecycle(session)
-            pending = lifecycle.get_pending_for_asset(seed_asset.id)
-            assert len(pending) == 1
+        from src.signals.lifecycle import SignalLifecycle
+        lifecycle = SignalLifecycle(session)
+        pending = lifecycle.get_pending_for_asset(seed_asset.id)
+        assert len(pending) == 1
 
     def test_no_pending_when_all_expired(self, session, seed_asset):
         sig = Signal(
@@ -511,6 +550,135 @@ class TestDuplicateSignalPrevention:
         lifecycle = SignalLifecycle(session)
         pending = lifecycle.get_pending_for_asset(seed_asset.id)
         assert len(pending) == 0
+
+    def test_equivalent_signal_is_suppressed(self):
+        from src.scheduler.jobs import _is_signal_equivalent
+        existing = MagicMock()
+        existing.signal_type = "BUY"
+        existing.entry_price = 50000.0
+        existing.stop_loss = 48500.0
+        existing.priority = "medium"
+
+        new_signal = MagicMock()
+        new_signal.signal_type = "BUY"
+        new_signal.entry_price = 50100.0
+        new_signal.stop_loss = 48550.0
+        new_signal.priority = "MEDIUM"
+
+        assert _is_signal_equivalent(existing, new_signal) is True
+
+    def test_different_type_not_equivalent(self):
+        from src.scheduler.jobs import _is_signal_equivalent
+        existing = MagicMock()
+        existing.signal_type = "BUY"
+        existing.entry_price = 50000.0
+        existing.stop_loss = 48500.0
+        existing.priority = "medium"
+
+        new_signal = MagicMock()
+        new_signal.signal_type = "SELL"
+        new_signal.entry_price = 50000.0
+        new_signal.stop_loss = 48500.0
+        new_signal.priority = "MEDIUM"
+
+        assert _is_signal_equivalent(existing, new_signal) is False
+
+    def test_different_price_not_equivalent(self):
+        from src.scheduler.jobs import _is_signal_equivalent
+        existing = MagicMock()
+        existing.signal_type = "BUY"
+        existing.entry_price = 50000.0
+        existing.stop_loss = 48500.0
+        existing.priority = "medium"
+
+        new_signal = MagicMock()
+        new_signal.signal_type = "BUY"
+        new_signal.entry_price = 55000.0
+        new_signal.stop_loss = 48500.0
+        new_signal.priority = "MEDIUM"
+
+        assert _is_signal_equivalent(existing, new_signal) is False
+
+    def test_supersede_creates_chain(self, session, seed_asset):
+        from src.signals.lifecycle import SignalLifecycle
+        lifecycle = SignalLifecycle(session)
+
+        old_sig = lifecycle.create_signal(
+            asset_id=seed_asset.id, signal_type="BUY", regime="TREND",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            reason="old signal", strategy_version="1.0",
+            entry_price=50000.0, priority="medium",
+        )
+        old_id = old_sig.id
+        session.commit()
+
+        new_sig = lifecycle.create_signal(
+            asset_id=seed_asset.id, signal_type="BUY", regime="TREND",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            reason="new signal", strategy_version="1.0",
+            entry_price=55000.0, priority="high",
+            previous_signal_id=old_id,
+            supersede_previous=True,
+        )
+        session.commit()
+
+        session.refresh(old_sig)
+        assert old_sig.status == "superseded"
+        assert old_sig.superseded_at is not None
+        assert new_sig.previous_signal_id == old_id
+        assert new_sig.status == "pending"
+
+        pending = lifecycle.get_pending_for_asset(seed_asset.id)
+        assert len(pending) == 1
+        assert pending[0].id == new_sig.id
+
+    def test_supersede_is_audit_logged(self, session, seed_asset):
+        from src.signals.lifecycle import SignalLifecycle
+        lifecycle = SignalLifecycle(session)
+
+        old_sig = lifecycle.create_signal(
+            asset_id=seed_asset.id, signal_type="BUY", regime="TREND",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            reason="old", strategy_version="1.0",
+        )
+        old_id = old_sig.id
+        session.commit()
+
+        lifecycle.create_signal(
+            asset_id=seed_asset.id, signal_type="SELL", regime="TREND",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            reason="new", strategy_version="1.0",
+            previous_signal_id=old_id, supersede_previous=True,
+        )
+        session.commit()
+
+        logs = session.query(AuditLog).all()
+        actions = [l.action for l in logs]
+        assert "SIGNAL_SUPERSEDED" in actions
+        assert "SIGNAL_CREATED" in actions
+
+    def test_old_signal_immutable_after_supersede(self, session, seed_asset):
+        from src.signals.lifecycle import SignalLifecycle, InvalidTransitionError
+        lifecycle = SignalLifecycle(session)
+
+        old_sig = lifecycle.create_signal(
+            asset_id=seed_asset.id, signal_type="BUY", regime="TREND",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            reason="old", strategy_version="1.0",
+        )
+        session.commit()
+
+        lifecycle.create_signal(
+            asset_id=seed_asset.id, signal_type="SELL", regime="TREND",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            reason="new", strategy_version="1.0",
+            previous_signal_id=old_sig.id, supersede_previous=True,
+        )
+        session.commit()
+
+        session.refresh(old_sig)
+        with pytest.raises(InvalidTransitionError):
+            lifecycle.confirm(old_sig)
 
 
 # ──────────────────────────────────────────────
@@ -530,18 +698,7 @@ class TestStartupSweep:
             s.add(state)
             s.commit()
 
-        def make_session():
-            class CM:
-                def __enter__(self_):
-                    self_.s = Session()
-                    return self_.s
-                def __exit__(self_, *args):
-                    self_.s.commit()
-                    self_.s.close()
-                    return False
-            return CM()
-
-        with patch("src.scheduler.jobs.get_session", side_effect=make_session):
+        with patch("src.scheduler.jobs.get_session", side_effect=_make_session_cm(Session)):
             from src.scheduler.jobs import startup_sweep
             await startup_sweep()
 
@@ -627,7 +784,7 @@ class TestSchedulerCommand:
 
 
 # ──────────────────────────────────────────────
-# Section 14: Pipeline replaces fetcher in bot.py
+# Section 14: Fetcher fully removed
 # ──────────────────────────────────────────────
 
 class TestBotImports:
@@ -656,17 +813,6 @@ class TestHealthHeartbeat:
     async def test_heartbeat_records_state(self, engine):
         Session = sessionmaker(bind=engine, expire_on_commit=False)
 
-        def make_session():
-            class CM:
-                def __enter__(self_):
-                    self_.s = Session()
-                    return self_.s
-                def __exit__(self_, *args):
-                    self_.s.commit()
-                    self_.s.close()
-                    return False
-            return CM()
-
         mock_pipeline = MagicMock()
         mock_health = AssetHealth(
             current_provider="kraken", candle_freshness_hours=1.0,
@@ -678,7 +824,7 @@ class TestHealthHeartbeat:
         orig = jobs._pipeline
         jobs._pipeline = mock_pipeline
 
-        with patch("src.scheduler.jobs.get_session", side_effect=make_session):
+        with patch("src.scheduler.jobs.get_session", side_effect=_make_session_cm(Session)):
             await jobs.health_heartbeat_job()
 
         jobs._pipeline = orig
@@ -718,17 +864,7 @@ class TestGetSchedulerStatus:
             s.add(SchedulerState(job_name="market_check", run_count=5, success_count=4, failure_count=1))
             s.commit()
 
-        def make_session():
-            class CM:
-                def __enter__(self_):
-                    self_.s = Session()
-                    return self_.s
-                def __exit__(self_, *args):
-                    self_.s.close()
-                    return False
-            return CM()
-
-        with patch("src.scheduler.jobs.get_session", side_effect=make_session):
+        with patch("src.scheduler.jobs.get_session", side_effect=_make_session_cm(Session)):
             from src.scheduler.jobs import get_scheduler_status
             result = get_scheduler_status()
 
@@ -750,12 +886,13 @@ class TestInstanceId:
 
 
 # ──────────────────────────────────────────────
-# Section 19: Process single asset — data persistence
+# Section 19: Only validated candles are persisted
 # ──────────────────────────────────────────────
 
-class TestProcessSingleAsset:
+class TestValidatedCandlePersistence:
     @pytest.mark.asyncio
-    async def test_persists_candles_even_when_unsafe(self, engine):
+    async def test_invalid_dataset_creates_meta_but_no_price_history(self, engine):
+        """Invalid data: metadata is updated, but NO candles go to price_history."""
         Session = sessionmaker(bind=engine, expire_on_commit=False)
 
         with Session() as s:
@@ -771,7 +908,7 @@ class TestProcessSingleAsset:
                 invalid_candle_count=0,
                 oldest_candle=candles[-1].open_time,
                 newest_candle=candles[0].open_time,
-                errors=["Not enough candles"], warnings=[],
+                errors=["Insufficient candles: 3 valid, 250 required"], warnings=[],
             ),
             provider_used="kraken",
             fallback_used=False,
@@ -779,40 +916,294 @@ class TestProcessSingleAsset:
         safety_result = AnalysisSafetyResult(
             safe=False, daily_df=None, current_price=None,
             provider_used="kraken",
-            reason="DATA_INVALID: Not enough candles",
+            reason="DATA_INVALID: Insufficient candles",
             asset_health=AssetHealth(),
         )
 
         mock_pipeline = AsyncMock()
-        mock_pipeline.get_analysis_ready_data = AsyncMock(return_value=safety_result)
         mock_pipeline.fetch_validated_candles = AsyncMock(return_value=fetch_result)
+        mock_pipeline.get_analysis_ready_data = AsyncMock(return_value=safety_result)
 
         import src.scheduler.jobs as jobs
         orig_pipeline = jobs._pipeline
         jobs._pipeline = mock_pipeline
 
-        def make_session():
-            class CM:
-                def __enter__(self_):
-                    self_.s = Session()
-                    return self_.s
-                def __exit__(self_, *args):
-                    self_.s.commit()
-                    self_.s.close()
-                    return False
-            return CM()
-
         asset_config = AssetConfig(symbol="BTC", kraken_pair="XXBTZUSD", coinbase_pair="BTC-USD")
 
-        with patch("src.scheduler.jobs.get_session", side_effect=make_session):
+        with patch("src.scheduler.jobs.get_session", side_effect=_make_session_cm(Session)):
             result = await jobs._process_single_asset(asset_config)
 
         jobs._pipeline = orig_pipeline
 
         assert result["status"] == "data_unsafe"
+        assert result["candles_persisted"] == 0
+
         with Session() as s:
-            count = s.query(PriceHistory).count()
-            assert count == 3
+            price_count = s.query(PriceHistory).count()
+            assert price_count == 0, "Invalid dataset must NOT create price_history rows"
+
+            meta = s.query(MarketDataMeta).first()
+            assert meta is not None, "Invalid dataset MUST create metadata"
+            assert meta.is_sufficient is False
+            assert "Insufficient" in (meta.validation_error or "")
+
+    @pytest.mark.asyncio
+    async def test_valid_dataset_persists_candles_and_meta(self, engine):
+        """Valid data: both candles and metadata are persisted."""
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
+
+        with Session() as s:
+            asset = Asset(symbol="BTC", kraken_pair="XXBTZUSD", coinbase_pair="BTC-USD")
+            s.add(asset)
+            s.commit()
+
+        import pandas as pd
+        candles = _make_candles(260)
+        fetch_result = FetchResult(
+            candles=candles,
+            validation=ValidationResult(
+                valid=True, candle_count=260, valid_candle_count=260,
+                invalid_candle_count=0,
+                oldest_candle=candles[-1].open_time,
+                newest_candle=candles[0].open_time,
+                errors=[], warnings=[],
+            ),
+            provider_used="kraken",
+            fallback_used=False,
+        )
+        safety_result = AnalysisSafetyResult(
+            safe=True, daily_df=pd.DataFrame({"close": [50000]}), current_price=50000.0,
+            provider_used="kraken",
+            reason="", asset_health=AssetHealth(),
+        )
+
+        mock_pipeline = AsyncMock()
+        mock_pipeline.fetch_validated_candles = AsyncMock(return_value=fetch_result)
+        mock_pipeline.get_analysis_ready_data = AsyncMock(return_value=safety_result)
+        mock_pipeline.get_health.return_value = AssetHealth()
+
+        import src.scheduler.jobs as jobs
+        orig_pipeline = jobs._pipeline
+        orig_engine = jobs._engine
+        jobs._pipeline = mock_pipeline
+
+        mock_strategy = MagicMock()
+        from src.strategy.regime import MarketRegime
+        mock_strategy.analyze.return_value = MagicMock(
+            signal_type="NO_TRADE", regime=MarketRegime.CHOP,
+            priority="MEDIUM", reason="test",
+        )
+        jobs._engine = mock_strategy
+
+        asset_config = AssetConfig(symbol="BTC", kraken_pair="XXBTZUSD", coinbase_pair="BTC-USD")
+
+        with patch("src.scheduler.jobs.get_session", side_effect=_make_session_cm(Session)):
+            result = await jobs._process_single_asset(asset_config)
+
+        jobs._pipeline = orig_pipeline
+        jobs._engine = orig_engine
+
+        assert result["candles_persisted"] == 260
+
+        with Session() as s:
+            price_count = s.query(PriceHistory).count()
+            assert price_count == 260
             meta = s.query(MarketDataMeta).first()
             assert meta is not None
-            assert meta.is_sufficient is False
+            assert meta.is_sufficient is True
+
+    @pytest.mark.asyncio
+    async def test_invalid_fetch_does_not_overwrite_valid_history(self, engine):
+        """A later invalid fetch must not delete or overwrite previously stored valid candles."""
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
+
+        with Session() as s:
+            asset = Asset(symbol="BTC", kraken_pair="XXBTZUSD", coinbase_pair="BTC-USD")
+            s.add(asset)
+            s.commit()
+            asset_id = asset.id
+
+        with Session() as s:
+            repo = PriceHistoryRepository(s)
+            good_candles = _make_candles(10)
+            repo.bulk_upsert(asset_id, "1d", "kraken", good_candles)
+            s.commit()
+
+        bad_candles = _make_candles(2)
+        fetch_result = FetchResult(
+            candles=bad_candles,
+            validation=ValidationResult(
+                valid=False, candle_count=2, valid_candle_count=2,
+                invalid_candle_count=0,
+                oldest_candle=bad_candles[-1].open_time,
+                newest_candle=bad_candles[0].open_time,
+                errors=["Not enough candles"], warnings=[],
+            ),
+            provider_used="kraken",
+            fallback_used=False,
+        )
+        safety_result = AnalysisSafetyResult(
+            safe=False, daily_df=None, current_price=None,
+            provider_used="kraken", reason="DATA_INVALID",
+            asset_health=AssetHealth(),
+        )
+
+        mock_pipeline = AsyncMock()
+        mock_pipeline.fetch_validated_candles = AsyncMock(return_value=fetch_result)
+        mock_pipeline.get_analysis_ready_data = AsyncMock(return_value=safety_result)
+
+        import src.scheduler.jobs as jobs
+        orig_pipeline = jobs._pipeline
+        jobs._pipeline = mock_pipeline
+
+        asset_config = AssetConfig(symbol="BTC", kraken_pair="XXBTZUSD", coinbase_pair="BTC-USD")
+
+        with patch("src.scheduler.jobs.get_session", side_effect=_make_session_cm(Session)):
+            await jobs._process_single_asset(asset_config)
+
+        jobs._pipeline = orig_pipeline
+
+        with Session() as s:
+            count = s.query(PriceHistory).count()
+            assert count == 10, "Previous valid history must be retained"
+
+    @pytest.mark.asyncio
+    async def test_valid_fallback_persists_when_primary_invalid(self, engine):
+        """When primary provider fails and fallback succeeds, fallback candles are persisted."""
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
+
+        with Session() as s:
+            asset = Asset(symbol="BTC", kraken_pair="XXBTZUSD", coinbase_pair="BTC-USD")
+            s.add(asset)
+            s.commit()
+
+        import pandas as pd
+        candles = _make_candles(260)
+        fetch_result = FetchResult(
+            candles=candles,
+            validation=ValidationResult(
+                valid=True, candle_count=260, valid_candle_count=260,
+                invalid_candle_count=0,
+                oldest_candle=candles[-1].open_time,
+                newest_candle=candles[0].open_time,
+                errors=[], warnings=[],
+            ),
+            provider_used="coinbase",
+            fallback_used=True,
+        )
+        safety_result = AnalysisSafetyResult(
+            safe=True, daily_df=pd.DataFrame({"close": [50000]}), current_price=50000.0,
+            provider_used="coinbase", reason="",
+            asset_health=AssetHealth(),
+        )
+
+        mock_pipeline = AsyncMock()
+        mock_pipeline.fetch_validated_candles = AsyncMock(return_value=fetch_result)
+        mock_pipeline.get_analysis_ready_data = AsyncMock(return_value=safety_result)
+        mock_pipeline.get_health.return_value = AssetHealth()
+
+        import src.scheduler.jobs as jobs
+        orig_pipeline = jobs._pipeline
+        orig_engine = jobs._engine
+        jobs._pipeline = mock_pipeline
+
+        from src.strategy.regime import MarketRegime
+        mock_strategy = MagicMock()
+        mock_strategy.analyze.return_value = MagicMock(
+            signal_type="NO_TRADE", regime=MarketRegime.CHOP,
+            priority="MEDIUM", reason="test",
+        )
+        jobs._engine = mock_strategy
+
+        asset_config = AssetConfig(symbol="BTC", kraken_pair="XXBTZUSD", coinbase_pair="BTC-USD")
+
+        with patch("src.scheduler.jobs.get_session", side_effect=_make_session_cm(Session)):
+            result = await jobs._process_single_asset(asset_config)
+
+        jobs._pipeline = orig_pipeline
+        jobs._engine = orig_engine
+
+        assert result["candles_persisted"] == 260
+        with Session() as s:
+            ph = s.query(PriceHistory).first()
+            assert ph.source == "coinbase"
+
+
+# ──────────────────────────────────────────────
+# Section 20: Health endpoint readiness
+# ──────────────────────────────────────────────
+
+class TestHealthEndpoint:
+    def test_liveness_always_returns_200(self):
+        from main import HealthHandler, set_app_ready
+        set_app_ready(False)
+
+        handler = MagicMock(spec=HealthHandler)
+        handler.path = "/"
+        handler.wfile = BytesIO()
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        HealthHandler.do_GET(handler)
+        handler.send_response.assert_called_with(200)
+
+    def test_health_returns_503_before_init(self):
+        from main import HealthHandler, set_app_ready
+        set_app_ready(False)
+
+        handler = MagicMock(spec=HealthHandler)
+        handler.path = "/health"
+        handler.wfile = BytesIO()
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        HealthHandler.do_GET(handler)
+        handler.send_response.assert_called_with(503)
+
+    def test_health_returns_200_after_init(self):
+        from main import HealthHandler, set_app_ready
+        set_app_ready(True)
+
+        handler = MagicMock(spec=HealthHandler)
+        handler.path = "/health"
+        handler.wfile = BytesIO()
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        HealthHandler.do_GET(handler)
+        handler.send_response.assert_called_with(200)
+
+        set_app_ready(False)
+
+    def test_health_does_not_expose_secrets(self):
+        from main import HealthHandler, set_app_ready
+        set_app_ready(True)
+
+        handler = MagicMock(spec=HealthHandler)
+        handler.path = "/health"
+        handler.wfile = BytesIO()
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        HealthHandler.do_GET(handler)
+
+        body = handler.wfile.getvalue().decode()
+        assert "token" not in body.lower()
+        assert "password" not in body.lower()
+        assert "api_key" not in body.lower()
+        assert "secret" not in body.lower()
+
+        set_app_ready(False)
+
+    def test_health_503_on_simulated_db_failure(self):
+        from main import HealthHandler, set_app_ready
+        set_app_ready(False)
+
+        handler = MagicMock(spec=HealthHandler)
+        handler.path = "/health"
+        handler.wfile = BytesIO()
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        HealthHandler.do_GET(handler)
+        handler.send_response.assert_called_with(503)

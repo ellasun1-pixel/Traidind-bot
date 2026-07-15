@@ -5,7 +5,7 @@ from datetime import datetime, timezone, date, timedelta
 from typing import Optional
 
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, update
 
 from src.database.models import (
     Asset, Signal, PaperAccount, PaperPosition,
@@ -244,21 +244,39 @@ class SchedulerStateRepository:
         self, job_name: str, lock_owner: str, lock_duration_seconds: int = 300
     ) -> bool:
         now = datetime.now(timezone.utc)
-        state = self.get_or_create(job_name)
-        if state.lock_owner and state.lock_expires_at:
-            expires = state.lock_expires_at
-            if expires.tzinfo is None:
-                expires = expires.replace(tzinfo=timezone.utc)
-            if expires > now:
-                return False
-        state.lock_owner = lock_owner
-        state.lock_expires_at = now + timedelta(seconds=lock_duration_seconds)
-        state.current_status = "running"
-        state.last_started_at = now
-        state.last_run_at = now
-        state.run_count += 1
+        self.get_or_create(job_name)
         self.session.flush()
-        return True
+
+        new_expires = now + timedelta(seconds=lock_duration_seconds)
+
+        # Atomic conditional UPDATE: only acquire if lock is free or expired.
+        # On PostgreSQL this is a single atomic statement; on SQLite it is
+        # safe because SQLite serializes writes.
+        from sqlalchemy import or_
+        rows = (
+            self.session.query(SchedulerState)
+            .filter(
+                SchedulerState.job_name == job_name,
+                or_(
+                    SchedulerState.lock_owner.is_(None),
+                    SchedulerState.lock_expires_at.is_(None),
+                    SchedulerState.lock_expires_at <= now,
+                ),
+            )
+            .update(
+                {
+                    SchedulerState.lock_owner: lock_owner,
+                    SchedulerState.lock_expires_at: new_expires,
+                    SchedulerState.current_status: "running",
+                    SchedulerState.last_started_at: now,
+                    SchedulerState.last_run_at: now,
+                    SchedulerState.run_count: SchedulerState.run_count + 1,
+                },
+                synchronize_session="fetch",
+            )
+        )
+        self.session.flush()
+        return rows > 0
 
     def release_lock(self, job_name: str) -> None:
         state = self.get_or_create(job_name)

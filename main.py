@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
 import os
 import sys
@@ -18,13 +18,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_app_ready = False
+_ready_lock = threading.Lock()
+
+
+def set_app_ready(ready: bool = True):
+    global _app_ready
+    with _ready_lock:
+        _app_ready = ready
+
+
+def is_app_ready() -> bool:
+    with _ready_lock:
+        return _app_ready
+
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"OK")
+        if self.path == "/health":
+            if is_app_ready():
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ready"}).encode())
+            else:
+                self.send_response(503)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "initializing"}).encode())
+        else:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"OK")
 
     def log_message(self, format, *args):
         pass
@@ -67,6 +93,7 @@ def run_bot():
     logger.info("Telegram bot created")
 
     scheduler = setup_scheduler()
+    logger.info("Scheduler initialized")
 
     async def send_to_chat(text: str):
         try:
@@ -87,6 +114,9 @@ def run_bot():
         logger.info("Agent mode: %s", settings.agent_mode.value)
         logger.info("Active assets: %s", ", ".join(a.symbol for a in settings.assets))
         logger.info("Live trading: %s", settings.live_trading_enabled)
+
+        set_app_ready(True)
+        logger.info("Application fully initialized — readiness gate open")
 
         try:
             await market_check_job()

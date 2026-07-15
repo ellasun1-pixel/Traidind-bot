@@ -190,7 +190,10 @@ class SignalLifecycle:
         current_price: float | Decimal | None = None,
     ) -> Signal:
         now = datetime.now(timezone.utc)
-        if signal.expires_at <= now:
+        expires = signal.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires <= now:
             self._transition(signal, SignalStatus.EXPIRED)
             raise InvalidTransitionError(signal.id, "expired", "confirmed")
 
