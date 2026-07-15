@@ -236,10 +236,6 @@ class StrategyEngine:
         if balance < 975:
             return None
 
-        ema200_val = latest.get("ema200", 0) or 0
-        if current_price < ema200_val:
-            return None
-
         if not self._is_closed_candle_confirmation(latest, prev):
             return None
 

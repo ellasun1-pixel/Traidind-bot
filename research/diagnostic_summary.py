@@ -34,8 +34,8 @@ def analyze_asset(asset: str, df: pd.DataFrame, warmup: int = 252):
             continue
 
         regime_counts = {"TREND": 0, "CHOP": 0, "LOWVOL": 0, "PANIC": 0, "DATA_INSUFFICIENT": 0}
-        funnel = {"start": n, "valid": 0, "regime": 0, "ema200": 0, "confirm": 0, "spike": 0}
-        killed = {"regime": 0, "ema200": 0, "confirm": 0, "spike": 0}
+        funnel = {"start": n, "valid": 0, "regime": 0, "confirm": 0, "spike": 0}
+        killed = {"regime": 0, "confirm": 0, "spike": 0}
         overlap_count = 0
 
         for i in range(warmup, len(daily) - 1):
@@ -66,12 +66,6 @@ def analyze_asset(asset: str, df: pd.DataFrame, warmup: int = 252):
                 killed["regime"] += 1
                 continue
             funnel["regime"] += 1
-
-            price_ok = close > ema200 if ema200 > 0 else False
-            if not price_ok:
-                killed["ema200"] += 1
-                continue
-            funnel["ema200"] += 1
 
             candle_ok = (prev_close > prev_ema50) if (prev_close > 0 and prev_ema50 > 0) else False
             if not candle_ok:
@@ -142,8 +136,8 @@ def main():
             k = r["killed"]
             print(f"  {r['period']:5s} {r['dates']}  candles={r['candles']}")
             print(f"    regimes: T={rc['TREND']} C={rc['CHOP']} L={rc['LOWVOL']} P={rc['PANIC']} D={rc['DATA_INSUFFICIENT']}")
-            print(f"    funnel:  {f['start']}→valid {f['valid']}→regime {f['regime']}→ema200 {f['ema200']}→confirm {f['confirm']}→spike {f['spike']}")
-            print(f"    killed:  regime={k['regime']} ema200={k['ema200']} confirm={k['confirm']} spike={k['spike']}")
+            print(f"    funnel:  {f['start']}→valid {f['valid']}→regime {f['regime']}→confirm {f['confirm']}→spike {f['spike']}")
+            print(f"    killed:  regime={k['regime']} confirm={k['confirm']} spike={k['spike']}")
             print(f"    overlap: {r['overlap']}  trades={r['trades']} WR={r['win_rate']:.0f}% exp=${r['expectancy']:.2f} PF={r['pf']:.2f} ret={r['return_pct']:+.2f}% dd={r['max_dd']:.2f}%")
 
             for key in total_killed:
