@@ -111,12 +111,19 @@ def run_bot():
                 len(settings.assets), settings.check_interval_minutes,
                 settings.strategy_version)
 
+    _chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not _chat_id:
+        logger.error("TELEGRAM_CHAT_ID not set — all Telegram notifications will be silently dropped")
+    else:
+        logger.info("TELEGRAM_CHAT_ID configured: %s", _chat_id)
+
     async def send_to_chat(text: str):
         try:
             bot = app.bot
-            chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-            if chat_id:
-                await bot.send_message(chat_id=int(chat_id), text=text, parse_mode="Markdown")
+            if not _chat_id:
+                logger.error("send_to_chat called but TELEGRAM_CHAT_ID is not set — message dropped")
+                return
+            await bot.send_message(chat_id=int(_chat_id), text=text, parse_mode="Markdown")
         except Exception as e:
             logger.error("Failed to send message: %s", e)
 

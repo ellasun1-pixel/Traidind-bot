@@ -48,6 +48,10 @@ def get_portfolio() -> PaperPortfolio:
 def set_send_message_func(func):
     global _send_message_func
     _send_message_func = func
+    if func is None:
+        logger.warning("set_send_message_func called with None — all notifications will be silently dropped")
+    else:
+        logger.info("set_send_message_func set successfully: %s", func.__qualname__ if hasattr(func, '__qualname__') else type(func).__name__)
 
 
 def get_last_signals() -> dict[str, TradeSignal]:
@@ -187,6 +191,7 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
     result["signal_type"] = signal.signal_type
 
     if signal.signal_type in ("NO_TRADE", "WAIT"):
+        logger.debug("asset=%s signal=%s — skipping DB persist and notification", asset.symbol, signal.signal_type)
         return result
 
     with get_session() as session:
@@ -204,7 +209,14 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
         if pending:
             existing = pending[0]
             if _is_signal_equivalent(existing, signal):
-                logger.info("Equivalent pending signal exists for %s, skipping", asset.symbol)
+                logger.warning(
+                    "DUPLICATE_SUPPRESSED asset=%s new_type=%s new_price=%.2f "
+                    "existing_id=%s existing_type=%s existing_price=%s existing_created=%s "
+                    "existing_expires=%s",
+                    asset.symbol, signal.signal_type, signal.entry_price or 0,
+                    existing.id, existing.signal_type,
+                    existing.entry_price, existing.created_at, existing.expires_at,
+                )
                 result["status"] = "duplicate_suppressed"
                 return result
             previous_signal_id = existing.id
@@ -238,14 +250,29 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
 
     notification_mgr = _notification_mgr or NotificationManager()
     should_send, reason = notification_mgr.should_send(signal)
-    if should_send and _send_message_func:
+
+    if not should_send:
+        logger.warning(
+            "NOTIFICATION_BLOCKED asset=%s type=%s reason=%s",
+            asset.symbol, signal.signal_type, reason,
+        )
+    elif _send_message_func is None:
+        logger.error(
+            "NOTIFICATION_DROPPED asset=%s type=%s — _send_message_func is None, "
+            "Telegram bot not initialized. Signal will NOT be delivered.",
+            asset.symbol, signal.signal_type,
+        )
+    else:
         formatter = _formatter or SignalFormatter()
         message = formatter.format_signal(signal)
         try:
             await _send_message_func(message)
-            logger.info("Signal sent for %s: %s (%s)", asset.symbol, signal.signal_type, reason)
+            logger.info("NOTIFICATION_SENT asset=%s type=%s reason=%s", asset.symbol, signal.signal_type, reason)
         except Exception as e:
-            logger.error("Telegram send failed for %s: %s", asset.symbol, e)
+            logger.error(
+                "NOTIFICATION_FAILED asset=%s type=%s error=%s — Telegram API call failed, signal lost",
+                asset.symbol, signal.signal_type, e,
+            )
 
     return result
 
@@ -421,6 +448,7 @@ async def morning_report_job():
                 return
 
         if _send_message_func is None:
+            logger.error("morning_report SKIPPED — _send_message_func is None, Telegram bot not initialized")
             return
 
         message = await _build_report("morning")
@@ -467,6 +495,7 @@ async def evening_report_job():
                 return
 
         if _send_message_func is None:
+            logger.error("evening_report SKIPPED — _send_message_func is None, Telegram bot not initialized")
             return
 
         message = await _build_report("evening")
