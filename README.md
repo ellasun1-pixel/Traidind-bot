@@ -10,7 +10,7 @@ It **never places real trades** — the user executes manually and confirms via 
 ```bash
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env with your TELEGRAM_BOT_TOKEN
+# Edit .env with your TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, and TELEGRAM_CHAT_IDS
 python main.py
 ```
 
