@@ -8,7 +8,8 @@
 | `DATABASE_URL` | Yes | Render PostgreSQL internal URL |
 | `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather |
 | `TELEGRAM_OWNER_IDS` | Yes | Owner's numeric Telegram user ID |
-| `TELEGRAM_CHAT_IDS` | Yes | Approved numeric chat ID |
+| `TELEGRAM_CHAT_ID` | Yes | Chat ID for proactive notifications (signals, reports). Get it from @userinfobot on Telegram. |
+| `TELEGRAM_CHAT_IDS` | Yes | Comma-separated approved chat IDs for command authorization. Can be the same value as `TELEGRAM_CHAT_ID`. |
 | `USER_TIMEZONE` | No | Default: `Asia/Jerusalem` |
 | `LIVE_TRADING_ENABLED` | No | Must be `false` (default) |
 | `PORT` | No | Render sets this automatically |

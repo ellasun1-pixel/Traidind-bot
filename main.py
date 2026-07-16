@@ -111,16 +111,13 @@ def run_bot():
                 len(settings.assets), settings.check_interval_minutes,
                 settings.strategy_version)
 
-    _chat_id = os.environ.get("TELEGRAM_CHAT_ID") or settings.telegram_chat_id
+    _chat_id = settings.telegram_chat_id
+    if not _chat_id and settings.telegram_chat_ids:
+        _chat_id = settings.telegram_chat_ids.split(",")[0].strip()
     if not _chat_id:
-        logger.error(
-            "TELEGRAM_CHAT_ID not set — all proactive notifications (signals, reports) will be silently dropped. "
-            "Set TELEGRAM_CHAT_ID in Render environment variables. "
-            "Also check: TELEGRAM_CHAT_IDS (plural) is set to '%s' but the send path uses TELEGRAM_CHAT_ID (singular).",
-            settings.telegram_chat_ids[:4] + "..." if settings.telegram_chat_ids else "<empty>",
-        )
+        logger.error("No chat ID configured — set TELEGRAM_CHAT_ID or TELEGRAM_CHAT_IDS in environment")
     else:
-        logger.info("TELEGRAM_CHAT_ID configured: ***%s (last 4 digits)", _chat_id[-4:])
+        logger.info("Proactive notifications target chat: ***%s", _chat_id[-4:])
 
     async def send_to_chat(text: str):
         try:
