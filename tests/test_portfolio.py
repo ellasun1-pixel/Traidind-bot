@@ -174,3 +174,11 @@ class TestChallengeStatus:
         msg = portfolio.reset_challenge_status()
         assert portfolio.challenge_status == "active"
         assert "lost" in msg and "active" in msg
+
+    def test_reset_challenge_preserves_won(self):
+        """Manual reset cannot revert terminal 'won' status."""
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.challenge_status = "won"
+        msg = portfolio.reset_challenge_status()
+        assert portfolio.challenge_status == "won"
+        assert "cannot reset" in msg.lower()

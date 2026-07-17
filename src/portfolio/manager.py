@@ -212,6 +212,8 @@ class PaperPortfolio:
 
     def reset_challenge_status(self) -> str:
         old = self.challenge_status
+        if old == "won":
+            return f"Challenge already won (equity=${self._get_equity_estimate():.2f}) — cannot reset"
         equity = self._get_equity_estimate()
         if equity >= settings.win_level:
             self.challenge_status = "won"
