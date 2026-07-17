@@ -360,6 +360,7 @@ class TestCommandRegistration:
                 "start", "help", "status", "portfolio", "signal",
                 "history", "confirm", "reject", "pause", "resume",
                 "settings", "auth", "scheduler", "health", "debug",
+                "reset_challenge",
             }
             assert expected == commands, f"Missing: {expected - commands}, Extra: {commands - expected}"
 

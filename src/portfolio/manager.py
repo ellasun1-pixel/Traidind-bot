@@ -210,8 +210,49 @@ class PaperPortfolio:
             "total_trades": len(self.closed_trades),
         }
 
-    def _update_challenge_status(self):
-        if self.balance_usd >= settings.win_level:
+    def reset_challenge_status(self) -> str:
+        old = self.challenge_status
+        equity = self._get_equity_estimate()
+        if equity >= settings.win_level:
             self.challenge_status = "won"
-        elif self.balance_usd <= settings.loss_level:
+        elif equity <= settings.loss_level:
             self.challenge_status = "lost"
+        else:
+            self.challenge_status = "active"
+        logger.warning(
+            "CHALLENGE_RESET %s→%s equity=%.2f", old, self.challenge_status, equity,
+        )
+        return f"Challenge status reset: {old} → {self.challenge_status} (equity=${equity:.2f})"
+
+    def _get_equity_estimate(self) -> float:
+        position_value = sum(
+            p.entry_price * p.quantity
+            for p in self.positions
+            if p.status == "open"
+        )
+        return self.balance_usd + position_value
+
+    def _update_challenge_status(self):
+        equity = self._get_equity_estimate()
+        old_status = self.challenge_status
+
+        if equity >= settings.win_level:
+            self.challenge_status = "won"
+        elif equity <= settings.loss_level:
+            self.challenge_status = "lost"
+        elif self.challenge_status == "lost":
+            self.challenge_status = "active"
+
+        if self.challenge_status != old_status:
+            logger.warning(
+                "CHALLENGE_STATUS_CHANGE %s→%s balance=%.2f position_value=%.2f equity=%.2f "
+                "win_level=%.2f loss_level=%.2f",
+                old_status, self.challenge_status,
+                self.balance_usd, equity - self.balance_usd, equity,
+                settings.win_level, settings.loss_level,
+            )
+        else:
+            logger.debug(
+                "challenge_status=%s balance=%.2f equity=%.2f",
+                self.challenge_status, self.balance_usd, equity,
+            )

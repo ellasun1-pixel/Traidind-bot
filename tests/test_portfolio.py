@@ -135,3 +135,42 @@ class TestChallengeStatus:
         portfolio = PaperPortfolio(starting_balance=950.0)
         ok, msg = portfolio.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
         assert not ok
+
+    def test_buy_does_not_falsely_trigger_loss(self):
+        """Buying a position reduces cash but not equity — should stay active."""
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        ok, msg = portfolio.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+        assert ok
+        assert portfolio.challenge_status == "active", (
+            f"Balance=${portfolio.balance_usd:.2f}, equity=${portfolio._get_equity_estimate():.2f}, "
+            f"status={portfolio.challenge_status} — should be active"
+        )
+
+    def test_equity_based_loss_detection(self):
+        """Loss only triggers when total equity (cash + positions) drops to $950."""
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.balance_usd = 940.0
+        portfolio._update_challenge_status()
+        assert portfolio.challenge_status == "lost"
+
+    def test_lost_recovers_to_active(self):
+        """Lost status recovers when equity returns above loss_level."""
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.challenge_status = "lost"
+        portfolio._update_challenge_status()
+        assert portfolio.challenge_status == "active"
+
+    def test_won_is_terminal(self):
+        """Won status does not revert to active."""
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.challenge_status = "won"
+        portfolio._update_challenge_status()
+        assert portfolio.challenge_status == "won"
+
+    def test_reset_challenge_status(self):
+        """Manual reset recalculates from current equity."""
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.challenge_status = "lost"
+        msg = portfolio.reset_challenge_status()
+        assert portfolio.challenge_status == "active"
+        assert "lost" in msg and "active" in msg
