@@ -508,6 +508,13 @@ async def _debug_asset(pipeline, asset) -> str:
     return "\n".join(lines)
 
 
+@owner_only
+async def cmd_reset_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    portfolio = get_portfolio()
+    result = portfolio.reset_challenge_status()
+    await update.message.reply_text(f"\U0001f504 {result}", parse_mode="Markdown")
+
+
 def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
@@ -532,5 +539,6 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("scheduler", cmd_scheduler))
     app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("debug", cmd_debug))
+    app.add_handler(CommandHandler("reset_challenge", cmd_reset_challenge))
 
     return app
