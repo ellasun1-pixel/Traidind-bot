@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import sys
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -64,7 +65,15 @@ def start_health_server():
     logger.info("Health server listening on 0.0.0.0:%d", port)
 
 
+def _handle_sigterm(signum, frame):
+    logger.warning("=== SIGTERM received — process shutting down (PID %d) ===", os.getpid())
+    set_app_ready(False)
+    sys.exit(0)
+
+
 def run_bot():
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
     from src.config import settings
     from src.database import init_db, check_db_health
     from src.telegram_bot.bot import create_bot
@@ -74,7 +83,7 @@ def run_bot():
     from src.auth.owner import validate_auth_config
     from src.health.service import get_health_service
 
-    logger.info("=== STARTUP DIAGNOSTICS ===")
+    logger.info("=== STARTUP DIAGNOSTICS (PID %d) ===", os.getpid())
 
     logger.info("[1/8] Environment: %s", settings.app_env)
     logger.info("[1/8] Live trading: %s", settings.live_trading_enabled)
@@ -143,7 +152,7 @@ def run_bot():
         logger.info("Active assets: %s", ", ".join(a.symbol for a in settings.assets))
 
         set_app_ready(True)
-        logger.info("=== STARTUP COMPLETE — readiness gate open ===")
+        logger.info("=== STARTUP COMPLETE — readiness gate open (PID %d) ===", os.getpid())
 
         try:
             await market_check_job()
@@ -151,9 +160,29 @@ def run_bot():
         except Exception as e:
             logger.error("Initial market check failed: %s", e)
 
+    async def error_handler(update, context):
+        logger.error(
+            "=== UNHANDLED EXCEPTION in update handler === %s: %s",
+            type(context.error).__name__, context.error, exc_info=context.error,
+        )
+
+    app.add_error_handler(error_handler)
     app.post_init = post_init
 
-    app.run_polling(drop_pending_updates=True)
+    logger.info("Starting polling loop (bootstrap_retries=-1, drop_pending_updates=True)")
+    try:
+        app.run_polling(
+            drop_pending_updates=True,
+            bootstrap_retries=-1,
+        )
+    except SystemExit:
+        logger.warning("=== SystemExit in polling loop (PID %d) ===", os.getpid())
+        raise
+    except Exception as e:
+        logger.critical("=== FATAL: polling loop crashed (PID %d) === %s: %s", os.getpid(), type(e).__name__, e, exc_info=True)
+        sys.exit(1)
+    finally:
+        logger.warning("=== Polling loop exited (PID %d) ===", os.getpid())
 
 
 def run_web():

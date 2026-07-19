@@ -54,7 +54,6 @@ class RiskManager:
         self,
         proposed_risk_usd: float,
         current_open_risk_usd: float,
-        current_balance: float,
         open_positions_count: int,
     ) -> tuple[bool, str]:
         max_total_risk = self.starting_balance * settings.max_total_open_risk_pct

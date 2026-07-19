@@ -57,7 +57,7 @@ class TestRiskBudget:
         ok, reason = rm.check_risk_budget(
             proposed_risk_usd=13.0,
             current_open_risk_usd=12.0,
-            current_balance=1000.0,
+
             open_positions_count=1,
         )
         assert ok
@@ -66,7 +66,7 @@ class TestRiskBudget:
         ok, reason = rm.check_risk_budget(
             proposed_risk_usd=15.0,
             current_open_risk_usd=20.0,
-            current_balance=1000.0,
+
             open_positions_count=1,
         )
         assert not ok
@@ -76,7 +76,7 @@ class TestRiskBudget:
         ok, reason = rm.check_risk_budget(
             proposed_risk_usd=16.0,
             current_open_risk_usd=0.0,
-            current_balance=1000.0,
+
             open_positions_count=0,
         )
         assert not ok
@@ -86,7 +86,7 @@ class TestRiskBudget:
         ok, reason = rm.check_risk_budget(
             proposed_risk_usd=15.0,
             current_open_risk_usd=0.0,
-            current_balance=1000.0,
+
             open_positions_count=0,
         )
         assert ok
@@ -95,7 +95,7 @@ class TestRiskBudget:
         ok, reason = rm.check_risk_budget(
             proposed_risk_usd=15.0,
             current_open_risk_usd=15.0,
-            current_balance=1000.0,
+
             open_positions_count=1,
         )
         assert ok
@@ -104,7 +104,7 @@ class TestRiskBudget:
         ok, reason = rm.check_risk_budget(
             proposed_risk_usd=15.0,
             current_open_risk_usd=15.01,
-            current_balance=1000.0,
+
             open_positions_count=1,
         )
         assert not ok
@@ -114,7 +114,7 @@ class TestRiskBudget:
         ok, reason = rm.check_risk_budget(
             proposed_risk_usd=12.0,
             current_open_risk_usd=0.0,
-            current_balance=1000.0,
+
             open_positions_count=2,
         )
         assert not ok

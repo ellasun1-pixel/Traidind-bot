@@ -151,6 +151,28 @@ class TestChallengeStatus:
             f"status={portfolio.challenge_status} — should be active"
         )
 
+    def test_confirm_uses_equity_not_cash_for_circuit_breakers(self):
+        """Second confirm must not be blocked by low cash when equity is healthy.
+
+        Reproduces: first BUY drops cash below $955, but equity stays ~$1000.
+        A second BUY should pass the circuit breaker (equity > $975), not be
+        rejected with 'BLOCKED: Balance <= $955'.
+        """
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        ok1, msg1 = portfolio.confirm_buy("BTC/USD", 50000, 400, 48500, 13.0)
+        assert ok1, f"First buy should succeed: {msg1}"
+
+        assert portfolio.balance_usd < 600, "Cash should be well below $955 after large buy"
+        equity = portfolio._get_equity_estimate()
+        assert equity > 975, f"Equity should be healthy (~$1000), got ${equity:.2f}"
+
+        ok2, msg2 = portfolio.confirm_buy("LINK/USD", 15.0, 100, 14.5, 13.0)
+        assert ok2, (
+            f"Second buy should NOT be blocked by circuit breaker. "
+            f"Cash=${portfolio.balance_usd:.2f}, Equity=${equity:.2f}, "
+            f"Rejection: {msg2}"
+        )
+
     def test_equity_based_loss_detection(self):
         """Loss only triggers when total equity (cash + positions) drops to $950."""
         portfolio = PaperPortfolio(starting_balance=1000.0)
