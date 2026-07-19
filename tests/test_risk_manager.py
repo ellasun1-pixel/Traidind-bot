@@ -55,8 +55,8 @@ class TestPositionSizing:
 class TestRiskBudget:
     def test_within_budget(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=3.0,
-            current_open_risk_usd=5.0,
+            proposed_risk_usd=13.0,
+            current_open_risk_usd=12.0,
             current_balance=1000.0,
             open_positions_count=1,
         )
@@ -64,8 +64,8 @@ class TestRiskBudget:
 
     def test_exceeds_total_risk(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=6.0,
-            current_open_risk_usd=5.0,
+            proposed_risk_usd=15.0,
+            current_open_risk_usd=20.0,
             current_balance=1000.0,
             open_positions_count=1,
         )
@@ -74,7 +74,7 @@ class TestRiskBudget:
 
     def test_exceeds_per_trade_max(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=5.0,
+            proposed_risk_usd=16.0,
             current_open_risk_usd=0.0,
             current_balance=1000.0,
             open_positions_count=0,
@@ -82,9 +82,37 @@ class TestRiskBudget:
         assert not ok
         assert "maximum" in reason.lower()
 
+    def test_at_per_trade_max_boundary(self, rm):
+        ok, reason = rm.check_risk_budget(
+            proposed_risk_usd=15.0,
+            current_open_risk_usd=0.0,
+            current_balance=1000.0,
+            open_positions_count=0,
+        )
+        assert ok
+
+    def test_at_total_risk_boundary(self, rm):
+        ok, reason = rm.check_risk_budget(
+            proposed_risk_usd=15.0,
+            current_open_risk_usd=15.0,
+            current_balance=1000.0,
+            open_positions_count=1,
+        )
+        assert ok
+
+    def test_just_over_total_risk_boundary(self, rm):
+        ok, reason = rm.check_risk_budget(
+            proposed_risk_usd=15.0,
+            current_open_risk_usd=15.01,
+            current_balance=1000.0,
+            open_positions_count=1,
+        )
+        assert not ok
+        assert "budget" in reason.lower()
+
     def test_max_positions_reached(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=2.0,
+            proposed_risk_usd=12.0,
             current_open_risk_usd=0.0,
             current_balance=1000.0,
             open_positions_count=2,
