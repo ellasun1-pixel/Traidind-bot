@@ -548,6 +548,7 @@ async def cmd_new_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+
 def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
