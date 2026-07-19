@@ -21,6 +21,12 @@ BEGINNER_TERMS = {
 }
 
 
+def _esc(text: str) -> str:
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
 class SignalFormatter:
     def __init__(self, beginner_mode: bool | None = None):
         self.beginner = beginner_mode if beginner_mode is not None else settings.beginner_explanations
@@ -38,7 +44,7 @@ class SignalFormatter:
         regime_val = signal.regime.value if hasattr(signal.regime, "value") else str(signal.regime)
 
         lines = [
-            f"{emoji} *{signal.priority} Signal — {signal.signal_type}*",
+            f"{emoji} *{signal.priority} Signal — {_esc(signal.signal_type)}*",
             "",
             "⚡ *PAPER TRADE — no real order will be placed.*",
             "",
@@ -48,7 +54,7 @@ class SignalFormatter:
             lines.append(f"Signal ID: `{signal_id}`")
 
         lines.append(f"Asset: {signal.asset_symbol}")
-        lines.append(f"Action: {signal.signal_type}")
+        lines.append(f"Action: {_esc(signal.signal_type)}")
 
         if signal.entry_price:
             lines.append(f"Current / Entry Price: ${signal.entry_price:.2f}")
@@ -69,7 +75,7 @@ class SignalFormatter:
         if signal.max_loss_usd:
             lines.append(f"Max Possible Loss: ${signal.max_loss_usd:.2f}")
 
-        lines.append(f"Market Regime: {regime_val}")
+        lines.append(f"Market Regime: {_esc(regime_val)}")
         lines.append(f"Order Type: {self._term(signal.order_type or 'LIMIT')}")
         if signal.cancel_level:
             lines.append(f"Cancel if price above: ${signal.cancel_level:.2f}")
@@ -77,9 +83,9 @@ class SignalFormatter:
         lines.append("")
 
         if signal.explanation:
-            lines.append(f"_{signal.explanation}_")
+            lines.append(f"_{_esc(signal.explanation)}_")
         if signal.reason:
-            lines.append(f"Reason: {signal.reason}")
+            lines.append(f"Reason: {_esc(signal.reason)}")
 
         lines.append("")
         lines.append(f"Equity: ${signal.current_balance:.2f}")
@@ -106,15 +112,15 @@ class SignalFormatter:
     def _format_no_trade(self, signal: TradeSignal) -> str:
         regime_val = signal.regime.value if hasattr(signal.regime, "value") else str(signal.regime)
         lines = [
-            f"⏸ *{signal.signal_type}* — {signal.asset_symbol}",
+            f"⏸ *{_esc(signal.signal_type)}* — {signal.asset_symbol}",
             "",
             "⚡ *PAPER TRADE — no real order will be placed.*",
             "",
-            f"Market Regime: {regime_val}",
-            f"Reason: {signal.reason}",
+            f"Market Regime: {_esc(regime_val)}",
+            f"Reason: {_esc(signal.reason)}",
         ]
         if signal.explanation:
-            lines.append(f"_{signal.explanation}_")
+            lines.append(f"_{_esc(signal.explanation)}_")
         lines.append("")
         lines.append(f"Equity: ${signal.current_balance:.2f}")
         lines.append(f"To win: ${signal.distance_to_win:.2f} | To defeat: ${signal.distance_to_loss:.2f}")
@@ -199,7 +205,7 @@ class SignalFormatter:
                 if isinstance(exp, datetime):
                     exp = exp.strftime("%H:%M UTC")
                 lines.append(f"  • {sig.get('asset', 'Unknown')}: "
-                             f"{sig.get('type', 'Unknown')} (expires {exp})")
+                             f"{_esc(sig.get('type', 'Unknown'))} (expires {exp})")
         else:
             lines.append("Pending Signals: None")
 
@@ -210,7 +216,7 @@ class SignalFormatter:
             for symbol, sig in last_signals.items():
                 regime = sig.regime.value if hasattr(sig.regime, "value") else str(sig.regime)
                 provider = getattr(sig, "provider", "Unavailable")
-                lines.append(f"  • {symbol}: {regime} (via {provider})")
+                lines.append(f"  • {symbol}: {_esc(regime)} (via {_esc(str(provider))})")
         else:
             lines.append("Market Regimes: Unavailable")
 

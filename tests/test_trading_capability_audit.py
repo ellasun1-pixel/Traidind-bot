@@ -758,7 +758,7 @@ class TestLoggingDiagnostics:
             current_balance=1000, distance_to_win=120, distance_to_loss=50,
         )
         text = fmt.format_signal(sig)
-        assert "NO_TRADE" in text
+        assert "NO\\_TRADE" in text
         assert "choppy" in text
         assert "BTC/USD" in text
         assert "CHOP" in text

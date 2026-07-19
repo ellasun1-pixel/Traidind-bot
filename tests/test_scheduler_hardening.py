@@ -779,7 +779,7 @@ class TestSchedulerCommand:
             await cmd_scheduler.__wrapped__(update, context)
 
         call_text = update.message.reply_text.call_args[0][0]
-        assert "market_check" in call_text
+        assert "market\\_check" in call_text
         assert "500ms" in call_text
 
 

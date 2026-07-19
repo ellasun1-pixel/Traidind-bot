@@ -512,14 +512,19 @@ class HealthService:
             "",
         ]
 
+        def _esc(text: str) -> str:
+            for ch in ("_", "*", "`", "["):
+                text = text.replace(ch, f"\\{ch}")
+            return text
+
         for name, c in system.components.items():
             emoji = status_emoji[c.status]
-            lines.append(f"{emoji} *{name.replace('_', ' ').title()}*: {c.message}")
+            lines.append(f"{emoji} *{name.replace('_', ' ').title()}*: {_esc(c.message)}")
 
         lines.append("")
         lines.append(f"Strategy Version: {settings.strategy_version}")
         lines.append(f"Live Trading: {'Enabled' if settings.live_trading_enabled else 'Disabled'}")
-        lines.append(f"Agent Mode: {settings.agent_mode.value}")
+        lines.append(f"Agent Mode: {_esc(settings.agent_mode.value)}")
 
         try:
             with get_session() as session:
