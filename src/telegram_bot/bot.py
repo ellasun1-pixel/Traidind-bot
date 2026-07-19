@@ -24,6 +24,13 @@ from src.strategy.engine import StrategyEngine
 
 logger = logging.getLogger(__name__)
 
+
+def _esc(text: str) -> str:
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
 formatter = SignalFormatter()
 _pending_signals: dict[int, dict] = {}
 _next_signal_id = 1
@@ -78,11 +85,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         last_signals = get_last_signals()
         equity = portfolio._get_equity_estimate()
 
-        mode = settings.agent_mode.value.replace("_", "\\_")
         status_lines = [
             "\U0001f4ca *Status*",
             "",
-            f"Mode: {mode}",
+            f"Mode: {_esc(settings.agent_mode.value)}",
             f"Equity: ${equity:.2f}",
             f"Cash: ${portfolio.balance_usd:.2f}",
             f"Challenge: {portfolio.challenge_status.upper()}",
@@ -94,8 +100,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_lines.append("*Latest regimes:*")
             for symbol, sig in last_signals.items():
                 regime_val = sig.regime.value if sig.regime else "UNKNOWN"
-                sig_type = sig.signal_type.replace("_", "\\_")
-                status_lines.append(f"  {symbol}: {regime_val} - {sig_type}")
+                status_lines.append(f"  {symbol}: {_esc(regime_val)} - {_esc(sig.signal_type)}")
         else:
             status_lines.append("No signals generated yet.")
 
@@ -257,13 +262,13 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "⚙️ *Settings*\n\n"
-        f"Mode: {settings.agent_mode.value}\n"
+        f"Mode: {_esc(settings.agent_mode.value)}\n"
         f"Beginner explanations: {settings.beginner_explanations}\n"
         f"Timezone: {settings.timezone}\n"
         f"Active hours: {settings.active_hours_start}:00–{settings.active_hours_end}:00\n"
         f"Check interval: {settings.check_interval_minutes} min\n"
         f"Assets: {', '.join(a.symbol for a in settings.assets)}\n"
-        "\n_Toggle: /settings beginner true|false_"
+        "\nToggle: /settings beginner true|false"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -304,8 +309,8 @@ async def cmd_scheduler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_emoji = "\U0001f7e2" if s["current_status"] == "idle" else "\U0001f7e1"
         if s["last_error"]:
             status_emoji = "\U0001f534"
-        lines.append(f"{status_emoji} *{s['job_name']}*")
-        lines.append(f"  Status: {s['current_status']}")
+        lines.append(f"{status_emoji} *{_esc(s['job_name'])}*")
+        lines.append(f"  Status: {_esc(s['current_status'])}")
         lines.append(f"  Runs: {s['run_count']} (OK: {s['success_count']}, Fail: {s['failure_count']})")
         if s["last_duration_ms"] is not None:
             lines.append(f"  Last duration: {s['last_duration_ms']}ms")
@@ -313,7 +318,7 @@ async def cmd_scheduler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"  Last run: {s['last_run_at'].strftime('%Y-%m-%d %H:%M UTC')}")
         if s["last_error"]:
             err = s["last_error"][:100]
-            lines.append(f"  Error: {err}")
+            lines.append(f"  Error: {_esc(err)}")
         lines.append("")
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
@@ -448,7 +453,7 @@ async def _debug_asset(pipeline, asset) -> str:
     regime = classify_regime(latest)
 
     if regime == MarketRegime.DATA_INSUFFICIENT:
-        lines.append(f"*Regime: {regime.value}*")
+        lines.append(f"*Regime: {_esc(regime.value)}*")
         lines.append(f"Cannot classify — NaN in: {', '.join(nan_fields)}")
         lines.append("")
         lines.append("*Signal: NO\\_TRADE*")
@@ -487,7 +492,7 @@ async def _debug_asset(pipeline, asset) -> str:
     lines.append(f"  EMA50 > EMA200     {check(c_tr_ema)}  ({ema50_f:,.2f} vs {ema200_f:,.2f})")
     lines.append("")
 
-    lines.append(f"*Regime: {regime.value}*")
+    lines.append(f"*Regime: {_esc(regime.value)}*")
 
     if regime == MarketRegime.CHOP:
         failing = []
@@ -526,8 +531,8 @@ async def _debug_asset(pipeline, asset) -> str:
         equity, open_pos, portfolio.get_total_open_risk(),
     )
     lines.append("")
-    lines.append(f"*Signal: {signal.signal_type}*")
-    lines.append(f"Reason: {signal.reason}")
+    lines.append(f"*Signal: {_esc(signal.signal_type)}*")
+    lines.append(f"Reason: {_esc(signal.reason)}")
 
     return "\n".join(lines)
 
