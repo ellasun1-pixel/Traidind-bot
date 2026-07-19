@@ -82,11 +82,11 @@ class SignalFormatter:
             lines.append(f"Reason: {signal.reason}")
 
         lines.append("")
-        lines.append(f"Balance: ${signal.current_balance:.2f}")
+        lines.append(f"Equity: ${signal.current_balance:.2f}")
         lines.append(f"To win ($1120): ${signal.distance_to_win:.2f}")
         lines.append(f"To defeat ($950): ${signal.distance_to_loss:.2f}")
         if signal.remaining_usd:
-            lines.append(f"USD after trade: ${signal.remaining_usd:.2f}")
+            lines.append(f"Cash after trade: ${signal.remaining_usd:.2f}")
 
         lines.append("")
         lines.append(f"Expires: {settings.signal_expiry_minutes} minutes")
@@ -116,7 +116,7 @@ class SignalFormatter:
         if signal.explanation:
             lines.append(f"_{signal.explanation}_")
         lines.append("")
-        lines.append(f"Balance: ${signal.current_balance:.2f}")
+        lines.append(f"Equity: ${signal.current_balance:.2f}")
         lines.append(f"To win: ${signal.distance_to_win:.2f} | To defeat: ${signal.distance_to_loss:.2f}")
         lines.append("")
         lines.append("_No action needed. The bot will continue monitoring._")
@@ -126,8 +126,8 @@ class SignalFormatter:
         lines = [
             "\U0001f4ca *Portfolio Status*",
             "",
-            f"\U0001f4b0 Balance: ${summary['balance_usd']:.2f}",
-            f"\U0001f4c8 Total Equity: ${summary['total_equity']:.2f}",
+            f"\U0001f4b0 Equity: ${summary['total_equity']:.2f}",
+            f"\U0001f4b5 Cash: ${summary['balance_usd']:.2f}",
             f"\U0001f4ca Unrealized {self._term('P&L')}: ${summary['unrealized_pnl']:.2f}",
             f"\U0001f4ca Realized {self._term('P&L')}: ${summary['realized_pnl']:.2f}",
             f"\U0001f4c9 {self._term('Drawdown')}: {summary['drawdown_pct']:.2f}%",
@@ -160,7 +160,7 @@ class SignalFormatter:
             header = "\U0001f319 *Evening Report*"
 
         starting = settings.starting_balance
-        balance = summary["balance_usd"]
+        cash = summary["balance_usd"]
         equity = summary["total_equity"]
         total_return_pct = ((equity - starting) / starting) * 100
         to_win = summary["distance_to_win"]
@@ -170,7 +170,8 @@ class SignalFormatter:
             header,
             "⚡ *Trading — Paper Challenge*",
             "",
-            f"Simulated Account: ${balance:.2f}",
+            f"Equity: ${equity:.2f}",
+            f"Cash: ${cash:.2f}",
             f"Starting Balance: ${starting:.2f}",
             f"Realized {self._term('P&L')}: ${summary['realized_pnl']:.2f}",
             f"Unrealized {self._term('P&L')}: ${summary['unrealized_pnl']:.2f}",

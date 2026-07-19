@@ -210,6 +210,76 @@ class PaperPortfolio:
             "total_trades": len(self.closed_trades),
         }
 
+    @property
+    def is_challenge_active(self) -> bool:
+        return self.challenge_status == "active"
+
+    def get_challenge_ended_message(self) -> str:
+        equity = self._get_equity_estimate()
+        if self.challenge_status == "won":
+            return (
+                "\U0001f3c6 *CHALLENGE WON!*\n\n"
+                f"Final equity: ${equity:.2f}\n"
+                f"Target was: ${settings.win_level:.2f}\n"
+                f"Total trades: {len(self.closed_trades)}\n"
+                f"Realized P&L: ${self.realized_pnl_total:.2f}\n\n"
+                "The challenge has ended. No new signals will be generated.\n"
+                "Use /new\\_challenge to start a fresh attempt."
+            )
+        else:
+            return (
+                "\U0001f6d1 *CHALLENGE LOST*\n\n"
+                f"Final equity: ${equity:.2f}\n"
+                f"Loss boundary: ${settings.loss_level:.2f}\n"
+                f"Total trades: {len(self.closed_trades)}\n"
+                f"Realized P&L: ${self.realized_pnl_total:.2f}\n\n"
+                "The challenge has ended. No new signals will be generated.\n"
+                "Use /new\\_challenge to start a fresh attempt."
+            )
+
+    def start_new_challenge(self) -> tuple[dict, str]:
+        """Archive current challenge and start fresh. Returns (archive, message)."""
+        archive = {
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "outcome": self.challenge_status,
+            "final_balance": round(self.balance_usd, 2),
+            "final_equity": round(self._get_equity_estimate(), 2),
+            "peak_balance": round(self.peak_balance, 2),
+            "realized_pnl": round(self.realized_pnl_total, 2),
+            "total_trades": len(self.closed_trades),
+            "trades": [
+                {
+                    "symbol": t.symbol,
+                    "entry": t.entry_price,
+                    "exit": t.exit_price,
+                    "pnl": round(t.realized_pnl, 4) if t.realized_pnl else 0,
+                    "opened": t.opened_at.isoformat() if t.opened_at else None,
+                }
+                for t in self.closed_trades
+            ],
+            "open_positions_abandoned": [p.to_dict() for p in self.positions if p.status == "open"],
+        }
+
+        self.balance_usd = self.starting_balance
+        self.peak_balance = self.starting_balance
+        self.realized_pnl_total = 0.0
+        self.positions = []
+        self.closed_trades = []
+        self.challenge_status = "active"
+
+        logger.warning(
+            "NEW_CHALLENGE started. Previous outcome=%s final_equity=%.2f trades=%d",
+            archive["outcome"], archive["final_equity"], archive["total_trades"],
+        )
+        msg = (
+            f"\U0001f504 *New Paper Challenge started*\n\n"
+            f"Previous outcome: {archive['outcome'].upper()}\n"
+            f"Previous final equity: ${archive['final_equity']:.2f}\n"
+            f"Previous trades: {archive['total_trades']}\n\n"
+            f"Balance reset to ${self.starting_balance:.2f}. Good luck!"
+        )
+        return archive, msg
+
     def reset_challenge_status(self) -> str:
         old = self.challenge_status
         if old == "won":
@@ -234,7 +304,8 @@ class PaperPortfolio:
         )
         return self.balance_usd + position_value
 
-    def _update_challenge_status(self):
+    def _update_challenge_status(self) -> str | None:
+        """Returns a transition string ('won'/'lost') if challenge just ended, else None."""
         equity = self._get_equity_estimate()
         old_status = self.challenge_status
 
@@ -253,8 +324,11 @@ class PaperPortfolio:
                 self.balance_usd, equity - self.balance_usd, equity,
                 settings.win_level, settings.loss_level,
             )
+            if old_status == "active" and self.challenge_status in ("won", "lost"):
+                return self.challenge_status
         else:
             logger.debug(
                 "challenge_status=%s balance=%.2f equity=%.2f",
                 self.challenge_status, self.balance_usd, equity,
             )
+        return None

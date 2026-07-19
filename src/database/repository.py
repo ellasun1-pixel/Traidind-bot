@@ -11,7 +11,7 @@ from src.database.models import (
     Asset, Signal, PaperAccount, PaperPosition,
     TradeHistory, AppSetting, AuditLog, AlertHistory,
     SchedulerState, MarketDataMeta, DailySnapshot,
-    PriceHistory, HealthTransition,
+    PriceHistory, HealthTransition, PortfolioSnapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -515,3 +515,31 @@ class HealthTransitionRepository:
             .limit(limit)
             .all()
         )
+
+
+class PortfolioSnapshotRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def record(
+        self,
+        trigger: str,
+        cash_usd: float,
+        equity_usd: float,
+        realized_pnl: float,
+        open_positions_count: int,
+        open_positions_summary: list[dict] | None,
+        challenge_status: str,
+    ) -> PortfolioSnapshot:
+        snap = PortfolioSnapshot(
+            trigger=trigger,
+            cash_usd=round(cash_usd, 2),
+            equity_usd=round(equity_usd, 2),
+            realized_pnl=round(realized_pnl, 2),
+            open_positions_count=open_positions_count,
+            open_positions_summary=open_positions_summary,
+            challenge_status=challenge_status,
+        )
+        self.session.add(snap)
+        self.session.flush()
+        return snap

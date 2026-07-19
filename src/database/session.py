@@ -110,7 +110,7 @@ REQUIRED_TABLES = [
     "assets", "price_history", "signals", "paper_account",
     "paper_positions", "trade_history", "app_settings", "alert_history",
     "audit_log", "scheduler_state", "market_data_meta", "daily_snapshots",
-    "health_transitions",
+    "health_transitions", "portfolio_snapshots",
 ]
 
 

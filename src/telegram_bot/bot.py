@@ -11,7 +11,7 @@ from telegram.ext import (
 )
 
 from src.config import settings, AgentMode
-from src.scheduler.jobs import get_portfolio, get_last_signals, get_scheduler_status, get_pipeline
+from src.scheduler.jobs import get_portfolio, get_last_signals, get_scheduler_status, get_pipeline, record_portfolio_snapshot
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session, AuditLog
 from src.auth.owner import owner_only, validate_auth_config
@@ -65,6 +65,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/scheduler — Job execution status\n"
         "/health — Operational health dashboard\n"
         "/debug — Regime diagnostics (all or /debug BTC)\n"
+        "/new\\_challenge — Reset and start a new paper challenge\n"
         "/help — Show this message"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -74,12 +75,14 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     portfolio = get_portfolio()
     last_signals = get_last_signals()
+    equity = portfolio._get_equity_estimate()
 
     status_lines = [
         "\U0001f4ca *Status*",
         "",
         f"Mode: {settings.agent_mode.value}",
-        f"Balance: ${portfolio.balance_usd:.2f}",
+        f"Equity: ${equity:.2f}",
+        f"Cash: ${portfolio.balance_usd:.2f}",
         f"Challenge: {portfolio.challenge_status.upper()}",
         f"Open positions: {len([p for p in portfolio.positions if p.status == 'open'])}",
         "",
@@ -149,6 +152,7 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     results = []
+    challenge_ended = False
     for symbol, sig in pending.items():
         if sig.signal_type == "BUY":
             ok, msg = portfolio.confirm_buy(
@@ -166,6 +170,9 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
 
+        if not portfolio.is_challenge_active:
+            challenge_ended = True
+
     try:
         with get_session() as session:
             session.add(AuditLog(action="CONFIRM", actor="owner", detail={"results": results}))
@@ -176,6 +183,12 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\U0001f4cb *Confirmation Results*\n\n" + "\n".join(results),
         parse_mode="Markdown",
     )
+
+    record_portfolio_snapshot("trade_confirm")
+
+    if challenge_ended:
+        ended_msg = portfolio.get_challenge_ended_message()
+        await update.message.reply_text(ended_msg, parse_mode="Markdown")
 
 
 @owner_only
@@ -306,7 +319,8 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ASSET_ALIASES = {
     "BTC": "BTC/USD", "ETH": "ETH/USD", "XRP": "XRP/USD",
-    "LINK": "LINK/USD", "LTC": "LTC/USD",
+    "LINK": "LINK/USD", "LTC": "LTC/USD", "SOL": "SOL/USD",
+    "DOGE": "DOGE/USD", "AVAX": "AVAX/USD", "DOT": "DOT/USD",
 }
 
 
@@ -478,19 +492,19 @@ async def _debug_asset(pipeline, asset) -> str:
     lines.append("")
     lines.append("*BUY gate checks*")
     portfolio = get_portfolio()
-    balance = portfolio.balance_usd
+    equity = portfolio._get_equity_estimate()
     open_pos = portfolio.get_open_positions()
     existing = [p for p in open_pos if p.get("symbol") == asset.symbol]
 
     c_not_panic = regime != MarketRegime.PANIC
-    c_balance_ok = 955 < balance < 1110
+    c_balance_ok = 955 < equity < 1110
     c_above_ema200 = safety.current_price > ema200_f if ema200_f > 0 else False
     c_candle_conf = prev_close > prev_ema50 if prev_close and prev_ema50 else False
     c_no_spike = abs(p_short_f) <= 0.08
     c_max_pos = len([p for p in open_pos if p.get("status") == "open"]) < settings.max_open_positions
 
     lines.append(f"  Not PANIC          {check(c_not_panic)}")
-    lines.append(f"  Balance 955-1110   {check(c_balance_ok)}  (${balance:.2f})")
+    lines.append(f"  Equity 955-1110    {check(c_balance_ok)}  (${equity:.2f})")
     lines.append(f"  Price > EMA200     {check(c_above_ema200)}")
     lines.append(f"  Candle confirm     {check(c_candle_conf)}  (prev close {prev_close:,.2f} vs prev EMA50 {prev_ema50:,.2f})")
     lines.append(f"  No spike (≤8%)     {check(c_no_spike)}  ({p_short_f:+.2%})")
@@ -499,7 +513,7 @@ async def _debug_asset(pipeline, asset) -> str:
     engine = StrategyEngine()
     signal = engine.analyze(
         asset.symbol, safety.daily_df, safety.daily_df, safety.current_price,
-        balance, open_pos, portfolio.get_total_open_risk(),
+        equity, open_pos, portfolio.get_total_open_risk(),
     )
     lines.append("")
     lines.append(f"*Signal: {signal.signal_type}*")
@@ -513,6 +527,26 @@ async def cmd_reset_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE
     portfolio = get_portfolio()
     result = portfolio.reset_challenge_status()
     await update.message.reply_text(f"\U0001f504 {result}", parse_mode="Markdown")
+
+
+@owner_only
+async def cmd_new_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    portfolio = get_portfolio()
+    archive, msg = portfolio.start_new_challenge()
+
+    try:
+        with get_session() as session:
+            session.add(AuditLog(
+                action="NEW_CHALLENGE",
+                actor="owner",
+                detail=archive,
+            ))
+    except Exception as e:
+        logger.error("Failed to persist challenge archive: %s", e)
+
+    record_portfolio_snapshot("new_challenge")
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
 
 
 def create_bot(token: str | None = None) -> Application:
@@ -540,5 +574,6 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("debug", cmd_debug))
     app.add_handler(CommandHandler("reset_challenge", cmd_reset_challenge))
+    app.add_handler(CommandHandler("new_challenge", cmd_new_challenge))
 
     return app
