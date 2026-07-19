@@ -97,7 +97,7 @@ class PaperPortfolio:
         )
 
         ok, reason = self.risk_manager.check_risk_budget(
-            risk_dollars, total_open_risk, self.balance_usd, len(open_positions)
+            risk_dollars, total_open_risk, len(open_positions)
         )
         if not ok:
             return False, reason
