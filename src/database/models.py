@@ -251,3 +251,17 @@ class DailySnapshot(Base):
     peak_balance = Column(Numeric(12, 2), nullable=False)
     strategy_version = Column(String(20), nullable=False, default="1.0")
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
+class PortfolioSnapshot(Base):
+    __tablename__ = "portfolio_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trigger = Column(String(30), nullable=False)
+    cash_usd = Column(Numeric(12, 2), nullable=False)
+    equity_usd = Column(Numeric(12, 2), nullable=False)
+    realized_pnl = Column(Numeric(12, 2), nullable=False)
+    open_positions_count = Column(Integer, nullable=False, default=0)
+    open_positions_summary = Column(JSON)
+    challenge_status = Column(String(10), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)

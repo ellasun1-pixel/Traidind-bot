@@ -1,6 +1,7 @@
 import pytest
 from src.portfolio.manager import PaperPortfolio
 from src.config import settings
+from src.strategy.engine import StrategyEngine
 
 
 @pytest.fixture
@@ -244,3 +245,49 @@ class TestNewChallenge:
         assert "New Paper Challenge started" in msg
         assert "WON" in msg
         assert "$1000.00" in msg or "$1,000.00" in msg
+
+
+class TestEquityBasedDistances:
+    def test_distance_to_win_uses_equity_not_cash(self):
+        """After a BUY, distance_to_win should be based on equity (unchanged),
+        not on reduced cash balance."""
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+
+        equity = portfolio._get_equity_estimate()
+        assert abs(equity - 1000.0) < 1.0, "Equity should be ~$1000 after buy"
+        assert portfolio.balance_usd < 900, "Cash should be reduced by ~$100"
+
+        expected_distance_to_win = settings.win_level - equity
+        expected_distance_to_loss = equity - settings.loss_level
+
+        assert abs(expected_distance_to_win - 120.0) < 1.0
+        assert abs(expected_distance_to_loss - 50.0) < 1.0
+
+    def test_engine_receives_equity_based_distance(self):
+        """The StrategyEngine should produce distance_to_win based on equity."""
+        import pandas as pd
+        import numpy as np
+
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+
+        equity = portfolio._get_equity_estimate()
+        engine = StrategyEngine()
+
+        df = pd.DataFrame({
+            "open": np.random.uniform(49000, 51000, 250),
+            "high": np.random.uniform(49000, 51000, 250),
+            "low": np.random.uniform(49000, 51000, 250),
+            "close": np.random.uniform(49000, 51000, 250),
+            "volume": np.random.uniform(100, 1000, 250),
+        })
+
+        signal = engine.analyze(
+            "BTC/USD", df, df, 50000.0,
+            equity, portfolio.get_open_positions(),
+            portfolio.get_total_open_risk(),
+        )
+
+        assert abs(signal.distance_to_win - (settings.win_level - equity)) < 0.01
+        assert abs(signal.distance_to_loss - (equity - settings.loss_level)) < 0.01

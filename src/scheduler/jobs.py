@@ -21,7 +21,7 @@ from src.database.models import Signal, Asset
 from src.database.repository import (
     AssetRepository, SchedulerStateRepository, AuditLogRepository,
     PriceHistoryRepository, MarketDataMetaRepository, SignalRepository,
-    AppSettingRepository,
+    AppSettingRepository, PortfolioSnapshotRepository,
 )
 from src.signals.lifecycle import SignalLifecycle, SignalType
 from src.health.service import get_health_service
@@ -43,6 +43,25 @@ def get_portfolio() -> PaperPortfolio:
     if _portfolio is None:
         _portfolio = PaperPortfolio()
     return _portfolio
+
+
+def record_portfolio_snapshot(trigger: str) -> None:
+    portfolio = get_portfolio()
+    open_pos = portfolio.get_open_positions()
+    try:
+        with get_session() as session:
+            repo = PortfolioSnapshotRepository(session)
+            repo.record(
+                trigger=trigger,
+                cash_usd=portfolio.balance_usd,
+                equity_usd=portfolio._get_equity_estimate(),
+                realized_pnl=portfolio.realized_pnl_total,
+                open_positions_count=len(open_pos),
+                open_positions_summary=open_pos or None,
+                challenge_status=portfolio.challenge_status,
+            )
+    except Exception as e:
+        logger.error("Failed to record portfolio snapshot (%s): %s", trigger, e)
 
 
 def set_send_message_func(func):
@@ -176,13 +195,14 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
     portfolio = get_portfolio()
     open_positions = portfolio.get_open_positions()
     total_risk = portfolio.get_total_open_risk()
+    equity = portfolio._get_equity_estimate()
 
     signal = engine.analyze(
         symbol=asset.symbol,
         daily_df=safety.daily_df,
         h4_df=safety.daily_df,
         current_price=safety.current_price,
-        portfolio_balance=portfolio.balance_usd,
+        portfolio_balance=equity,
         open_positions=open_positions,
         total_open_risk_usd=total_risk,
     )
@@ -458,6 +478,7 @@ async def morning_report_job():
 
         message = await _build_report("morning")
         await _send_message_func(message)
+        record_portfolio_snapshot("morning_report")
 
         with get_session() as session:
             setting_repo = AppSettingRepository(session)
@@ -505,6 +526,7 @@ async def evening_report_job():
 
         message = await _build_report("evening")
         await _send_message_func(message)
+        record_portfolio_snapshot("evening_report")
 
         with get_session() as session:
             setting_repo = AppSettingRepository(session)
