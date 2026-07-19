@@ -78,10 +78,11 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         last_signals = get_last_signals()
         equity = portfolio._get_equity_estimate()
 
+        mode = settings.agent_mode.value.replace("_", "\\_")
         status_lines = [
             "\U0001f4ca *Status*",
             "",
-            f"Mode: {settings.agent_mode.value}",
+            f"Mode: {mode}",
             f"Equity: ${equity:.2f}",
             f"Cash: ${portfolio.balance_usd:.2f}",
             f"Challenge: {portfolio.challenge_status.upper()}",
@@ -93,7 +94,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_lines.append("*Latest regimes:*")
             for symbol, sig in last_signals.items():
                 regime_val = sig.regime.value if sig.regime else "UNKNOWN"
-                status_lines.append(f"  {symbol}: {regime_val} - {sig.signal_type}")
+                sig_type = sig.signal_type.replace("_", "\\_")
+                status_lines.append(f"  {symbol}: {regime_val} - {sig_type}")
         else:
             status_lines.append("No signals generated yet.")
 
