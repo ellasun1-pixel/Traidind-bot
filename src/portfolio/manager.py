@@ -102,8 +102,9 @@ class PaperPortfolio:
         if not ok:
             return False, reason
 
+        equity = self._get_equity_estimate()
         adjusted_value, note = self.risk_manager.apply_circuit_breakers(
-            self.balance_usd, position_value_usd, "BUY"
+            equity, position_value_usd, "BUY"
         )
         if adjusted_value == 0:
             return False, note
