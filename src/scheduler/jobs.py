@@ -284,6 +284,11 @@ async def market_check_job():
         logger.info("Agent is PAUSED, skipping market check")
         return
 
+    portfolio = get_portfolio()
+    if not portfolio.is_challenge_active:
+        logger.info("Challenge is %s — skipping signal generation", portfolio.challenge_status)
+        return
+
     if _engine is None:
         _engine = StrategyEngine()
 

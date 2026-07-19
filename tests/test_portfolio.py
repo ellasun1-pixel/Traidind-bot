@@ -182,3 +182,65 @@ class TestChallengeStatus:
         msg = portfolio.reset_challenge_status()
         assert portfolio.challenge_status == "won"
         assert "cannot reset" in msg.lower()
+
+
+class TestChallengeEndedStopsSignals:
+    def test_is_challenge_active_true_when_active(self):
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        assert portfolio.is_challenge_active is True
+
+    def test_is_challenge_active_false_when_won(self):
+        portfolio = PaperPortfolio(starting_balance=1120.0)
+        assert portfolio.is_challenge_active is False
+
+    def test_is_challenge_active_false_when_lost(self):
+        portfolio = PaperPortfolio(starting_balance=950.0)
+        assert portfolio.is_challenge_active is False
+
+    def test_challenge_ended_message_won(self):
+        portfolio = PaperPortfolio(starting_balance=1120.0)
+        msg = portfolio.get_challenge_ended_message()
+        assert "WON" in msg
+        assert "1120" in msg or "1,120" in msg
+
+    def test_challenge_ended_message_lost(self):
+        portfolio = PaperPortfolio(starting_balance=950.0)
+        msg = portfolio.get_challenge_ended_message()
+        assert "LOST" in msg
+
+
+class TestNewChallenge:
+    def test_new_challenge_resets_balance(self):
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.balance_usd = 800.0
+        portfolio.challenge_status = "lost"
+        archive, msg = portfolio.start_new_challenge()
+        assert portfolio.balance_usd == 1000.0
+        assert portfolio.challenge_status == "active"
+        assert portfolio.is_challenge_active is True
+
+    def test_new_challenge_archives_trades(self):
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+        portfolio.confirm_sell("BTC/USD", 51000)
+        assert len(portfolio.closed_trades) == 1
+        archive, msg = portfolio.start_new_challenge()
+        assert archive["total_trades"] == 1
+        assert len(archive["trades"]) == 1
+        assert portfolio.closed_trades == []
+        assert portfolio.positions == []
+
+    def test_new_challenge_clears_realized_pnl(self):
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.realized_pnl_total = 50.0
+        archive, msg = portfolio.start_new_challenge()
+        assert archive["realized_pnl"] == 50.0
+        assert portfolio.realized_pnl_total == 0.0
+
+    def test_new_challenge_message_format(self):
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.challenge_status = "won"
+        archive, msg = portfolio.start_new_challenge()
+        assert "New Paper Challenge started" in msg
+        assert "WON" in msg
+        assert "$1000.00" in msg or "$1,000.00" in msg

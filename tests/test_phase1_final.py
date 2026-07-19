@@ -342,7 +342,7 @@ class TestReportFormatting:
 # ── Command Registration ───────────────────────────────────────
 
 class TestCommandRegistration:
-    def test_15_commands_registered(self):
+    def test_all_commands_registered(self):
         from src.telegram_bot.bot import create_bot
         with patch.dict(os.environ, {
             "TELEGRAM_BOT_TOKEN": "test_token_12345:AABBCC",
@@ -360,7 +360,7 @@ class TestCommandRegistration:
                 "start", "help", "status", "portfolio", "signal",
                 "history", "confirm", "reject", "pause", "resume",
                 "settings", "auth", "scheduler", "health", "debug",
-                "reset_challenge",
+                "reset_challenge", "new_challenge",
             }
             assert expected == commands, f"Missing: {expected - commands}, Extra: {commands - expected}"
 

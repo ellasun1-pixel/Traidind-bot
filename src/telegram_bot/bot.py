@@ -65,6 +65,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/scheduler — Job execution status\n"
         "/health — Operational health dashboard\n"
         "/debug — Regime diagnostics (all or /debug BTC)\n"
+        "/new\\_challenge — Reset and start a new paper challenge\n"
         "/help — Show this message"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -149,6 +150,7 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     results = []
+    challenge_ended = False
     for symbol, sig in pending.items():
         if sig.signal_type == "BUY":
             ok, msg = portfolio.confirm_buy(
@@ -166,6 +168,9 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
 
+        if not portfolio.is_challenge_active:
+            challenge_ended = True
+
     try:
         with get_session() as session:
             session.add(AuditLog(action="CONFIRM", actor="owner", detail={"results": results}))
@@ -176,6 +181,10 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\U0001f4cb *Confirmation Results*\n\n" + "\n".join(results),
         parse_mode="Markdown",
     )
+
+    if challenge_ended:
+        ended_msg = portfolio.get_challenge_ended_message()
+        await update.message.reply_text(ended_msg, parse_mode="Markdown")
 
 
 @owner_only
@@ -515,6 +524,24 @@ async def cmd_reset_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(f"\U0001f504 {result}", parse_mode="Markdown")
 
 
+@owner_only
+async def cmd_new_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    portfolio = get_portfolio()
+    archive, msg = portfolio.start_new_challenge()
+
+    try:
+        with get_session() as session:
+            session.add(AuditLog(
+                action="NEW_CHALLENGE",
+                actor="owner",
+                detail=archive,
+            ))
+    except Exception as e:
+        logger.error("Failed to persist challenge archive: %s", e)
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
 def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
@@ -540,5 +567,6 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("debug", cmd_debug))
     app.add_handler(CommandHandler("reset_challenge", cmd_reset_challenge))
+    app.add_handler(CommandHandler("new_challenge", cmd_new_challenge))
 
     return app
