@@ -48,10 +48,10 @@ settings:
   starting_balance: 1000.0
   win_level: 1120.0
   loss_level: 950.0
-  risk_per_trade_pct_min: 0.0025
-  risk_per_trade_pct_max: 0.004
-  risk_per_trade_pct_default: 0.003
-  max_total_open_risk_pct: 0.01
+  risk_per_trade_pct_min: 0.012
+  risk_per_trade_pct_max: 0.015
+  risk_per_trade_pct_default: 0.013
+  max_total_open_risk_pct: 0.03
   max_open_positions: 2
   commission_pct: 0.0026
   spread_pct: 0.001
