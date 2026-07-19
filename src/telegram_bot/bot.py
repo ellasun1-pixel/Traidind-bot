@@ -73,29 +73,37 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    portfolio = get_portfolio()
-    last_signals = get_last_signals()
-    equity = portfolio._get_equity_estimate()
+    try:
+        portfolio = get_portfolio()
+        last_signals = get_last_signals()
+        equity = portfolio._get_equity_estimate()
 
-    status_lines = [
-        "\U0001f4ca *Status*",
-        "",
-        f"Mode: {settings.agent_mode.value}",
-        f"Equity: ${equity:.2f}",
-        f"Cash: ${portfolio.balance_usd:.2f}",
-        f"Challenge: {portfolio.challenge_status.upper()}",
-        f"Open positions: {len([p for p in portfolio.positions if p.status == 'open'])}",
-        "",
-    ]
+        status_lines = [
+            "\U0001f4ca *Status*",
+            "",
+            f"Mode: {settings.agent_mode.value}",
+            f"Equity: ${equity:.2f}",
+            f"Cash: ${portfolio.balance_usd:.2f}",
+            f"Challenge: {portfolio.challenge_status.upper()}",
+            f"Open positions: {len([p for p in portfolio.positions if p.status == 'open'])}",
+            "",
+        ]
 
-    if last_signals:
-        status_lines.append("*Latest regimes:*")
-        for symbol, sig in last_signals.items():
-            status_lines.append(f"  {symbol}: {sig.regime.value} → {sig.signal_type}")
-    else:
-        status_lines.append("_No signals generated yet._")
+        if last_signals:
+            status_lines.append("*Latest regimes:*")
+            for symbol, sig in last_signals.items():
+                regime_val = sig.regime.value if sig.regime else "UNKNOWN"
+                status_lines.append(f"  {symbol}: {regime_val} - {sig.signal_type}")
+        else:
+            status_lines.append("No signals generated yet.")
 
-    await update.message.reply_text("\n".join(status_lines), parse_mode="Markdown")
+        await update.message.reply_text("\n".join(status_lines), parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_status crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Status error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
