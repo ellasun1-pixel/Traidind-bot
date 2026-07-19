@@ -24,6 +24,26 @@ assets:
     coinbase_pair: "LTC-USD"
     active: true
 
+  - symbol: "SOL/USD"
+    kraken_pair: "SOLUSD"
+    coinbase_pair: "SOL-USD"
+    active: true
+
+  - symbol: "DOGE/USD"
+    kraken_pair: "XDGUSD"
+    coinbase_pair: "DOGE-USD"
+    active: true
+
+  - symbol: "AVAX/USD"
+    kraken_pair: "AVAXUSD"
+    coinbase_pair: "AVAX-USD"
+    active: true
+
+  - symbol: "DOT/USD"
+    kraken_pair: "DOTUSD"
+    coinbase_pair: "DOT-USD"
+    active: true
+
 settings:
   starting_balance: 1000.0
   win_level: 1120.0

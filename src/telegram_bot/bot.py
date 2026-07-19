@@ -319,7 +319,8 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ASSET_ALIASES = {
     "BTC": "BTC/USD", "ETH": "ETH/USD", "XRP": "XRP/USD",
-    "LINK": "LINK/USD", "LTC": "LTC/USD",
+    "LINK": "LINK/USD", "LTC": "LTC/USD", "SOL": "SOL/USD",
+    "DOGE": "DOGE/USD", "AVAX": "AVAX/USD", "DOT": "DOT/USD",
 }
 
 

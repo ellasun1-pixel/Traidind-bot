@@ -62,7 +62,7 @@ class TestSchemaCompleteness:
             assert expected in tables, f"Table '{expected}' missing after alembic upgrade head"
 
     def test_seed_data_present(self, fresh_db):
-        """Alembic migrations seed the 5 initial assets and paper account."""
+        """Alembic migrations seed all assets and paper account."""
         url, path = fresh_db
 
         cfg = Config("alembic.ini")
@@ -74,7 +74,10 @@ class TestSchemaCompleteness:
             from sqlalchemy import text
             assets = conn.execute(text("SELECT symbol FROM assets ORDER BY symbol")).fetchall()
             symbols = [row[0] for row in assets]
-            assert symbols == ["BTC/USD", "ETH/USD", "LINK/USD", "LTC/USD", "XRP/USD"]
+            assert symbols == [
+                "AVAX/USD", "BTC/USD", "DOGE/USD", "DOT/USD",
+                "ETH/USD", "LINK/USD", "LTC/USD", "SOL/USD", "XRP/USD",
+            ]
 
             account = conn.execute(text("SELECT balance_usd FROM paper_account")).fetchone()
             assert account is not None
