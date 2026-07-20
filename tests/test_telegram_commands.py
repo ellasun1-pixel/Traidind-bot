@@ -80,7 +80,11 @@ async def test_cmd_history_empty(mock_update, mock_context):
 
 @pytest.mark.asyncio
 async def test_cmd_confirm_no_pending(mock_update, mock_context):
-    with patch("src.telegram_bot.bot.get_last_signals", return_value={}):
+    mock_session = MagicMock()
+    mock_session.query.return_value.join.return_value.filter.return_value.all.return_value = []
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=False)
+    with patch("src.telegram_bot.bot.get_session", return_value=mock_session):
         await cmd_confirm(mock_update, mock_context)
     text = mock_update.message.reply_text.call_args[0][0]
     assert "No pending" in text
@@ -88,7 +92,11 @@ async def test_cmd_confirm_no_pending(mock_update, mock_context):
 
 @pytest.mark.asyncio
 async def test_cmd_reject_no_pending(mock_update, mock_context):
-    with patch("src.telegram_bot.bot.get_last_signals", return_value={}):
+    mock_session = MagicMock()
+    mock_session.query.return_value.join.return_value.filter.return_value.all.return_value = []
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=False)
+    with patch("src.telegram_bot.bot.get_session", return_value=mock_session):
         await cmd_reject(mock_update, mock_context)
     text = mock_update.message.reply_text.call_args[0][0]
     assert "No pending" in text
