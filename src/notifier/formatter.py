@@ -231,6 +231,13 @@ class SignalFormatter:
             next_check = scheduler_info.get("next_market_check", "Unavailable")
             lines.append(f"Last Market Check: {last_check}")
             lines.append(f"Next Market Check: {next_check}")
+            fail_count = scheduler_info.get("failure_count")
+            if fail_count:
+                success_count = scheduler_info.get("success_count", 0)
+                lines.append(f"Checks: {success_count} OK / {fail_count} failed")
+                last_err = scheduler_info.get("last_error")
+                if last_err:
+                    lines.append(f"Last error: {_esc(last_err)}")
 
         if report_type == "evening":
             lines.append("")
