@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -184,7 +185,7 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
                     session, asset_id, fetch_result, fetch_result.provider_used,
                 )
 
-    safety = await pipeline.get_analysis_ready_data(asset)
+    safety = await pipeline.get_analysis_ready_data(asset, prefetched=fetch_result)
 
     if not safety.safe:
         logger.warning("Data not safe for %s: %s", asset.symbol, safety.reason)
@@ -206,6 +207,7 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
         open_positions=open_positions,
         total_open_risk_usd=total_risk,
     )
+    signal.provider = safety.provider_used
 
     _last_signals[asset.symbol] = signal
     result["signal_type"] = signal.signal_type
@@ -325,9 +327,8 @@ async def market_check_job():
     asset_results = []
     errors = []
 
-    for asset in settings.assets:
-        if not asset.active:
-            continue
+    active_assets = [a for a in settings.assets if a.active]
+    for i, asset in enumerate(active_assets):
         try:
             result = await _process_single_asset(asset)
             asset_results.append(result)
@@ -338,6 +339,8 @@ async def market_check_job():
                 "error": f"{type(e).__name__}: {e}",
             })
             errors.append(f"{asset.symbol}: {e}")
+        if i < len(active_assets) - 1:
+            await asyncio.sleep(1.5)
 
     duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -436,6 +439,11 @@ async def _build_report(report_type: str) -> str:
                             ts = ts.replace(tzinfo=timezone.utc)
                         scheduler_info["last_market_check"] = ts.strftime("%H:%M UTC")
                     scheduler_info["next_market_check"] = f"~{settings.check_interval_minutes} min"
+                    scheduler_info["run_count"] = s.run_count
+                    scheduler_info["success_count"] = s.success_count
+                    scheduler_info["failure_count"] = s.failure_count
+                    if s.last_error:
+                        scheduler_info["last_error"] = s.last_error[:120]
     except Exception:
         pass
 

@@ -198,11 +198,11 @@ class MarketDataPipeline:
         return is_divergent, divergence, kraken_quote
 
     async def get_analysis_ready_data(
-        self, asset: AssetConfig
+        self, asset: AssetConfig, prefetched: FetchResult | None = None,
     ) -> AnalysisSafetyResult:
         health = self.get_health(asset.symbol)
 
-        fetch_result = await self.fetch_validated_candles(asset, "1d")
+        fetch_result = prefetched or await self.fetch_validated_candles(asset, "1d")
 
         if not fetch_result.validation.valid:
             reason = f"DATA_INVALID: {'; '.join(fetch_result.validation.errors)}"

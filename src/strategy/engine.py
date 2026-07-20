@@ -33,6 +33,7 @@ class TradeSignal:
     current_balance: float = 0.0
     distance_to_win: float = 0.0
     distance_to_loss: float = 0.0
+    provider: str = ""
 
 
 class StrategyEngine:
