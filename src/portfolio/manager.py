@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from src.config import settings
+from src.database import get_session
+from src.database.models import PaperPosition, TradeHistory, Asset, PortfolioSnapshot
+from src.database.repository import PositionRepository, TradeHistoryRepository
 from src.risk.manager import RiskManager
 
 logger = logging.getLogger(__name__)
@@ -135,6 +138,12 @@ class PaperPortfolio:
         self.positions.append(pos)
         self.balance_usd -= total_cost
         self._update_challenge_status()
+
+        try:
+            self._persist_buy(pos, signal_id)
+        except Exception as e:
+            logger.error("Failed to persist BUY to DB: %s", e)
+
         logger.info("BUY confirmed: %s %.4f @ $%.2f (value=$%.2f)", symbol, quantity, entry_price, position_value_usd)
         return True, f"Bought {quantity:.6f} {symbol} @ ${entry_price:.2f}"
 
@@ -153,6 +162,11 @@ class PaperPortfolio:
             self.balance_usd += proceeds
             self.realized_pnl_total += pnl
             self.closed_trades.append(pos)
+
+            try:
+                self._persist_sell(pos, signal_id)
+            except Exception as e:
+                logger.error("Failed to persist SELL to DB: %s", e)
 
         self._update_challenge_status()
         return True, f"Sold {symbol} @ ${exit_price:.2f}, P&L: ${total_pnl:.2f}"
@@ -296,6 +310,177 @@ class PaperPortfolio:
             "CHALLENGE_RESET %s→%s equity=%.2f", old, self.challenge_status, equity,
         )
         return f"Challenge status reset: {old} → {self.challenge_status} (equity=${equity:.2f})"
+
+    def _persist_buy(self, pos: Position, signal_id: int | str | None) -> None:
+        with get_session() as session:
+            asset = session.query(Asset).filter(Asset.symbol == pos.symbol).first()
+            if not asset:
+                logger.warning("Asset %s not found in DB, skipping position persist", pos.symbol)
+                return
+            repo = PositionRepository(session)
+            db_pos = repo.create(
+                asset_id=asset.id,
+                signal_id=str(signal_id) if signal_id else None,
+                side="BUY",
+                quantity=pos.quantity,
+                entry_price=pos.entry_price,
+                stop_loss=pos.stop_loss,
+            )
+            pos._db_position_id = db_pos.id
+
+    def _persist_sell(self, pos: Position, signal_id: int | str | None) -> None:
+        with get_session() as session:
+            asset = session.query(Asset).filter(Asset.symbol == pos.symbol).first()
+            if not asset:
+                return
+            if hasattr(pos, "_db_position_id") and pos._db_position_id:
+                db_pos = session.get(PaperPosition, pos._db_position_id)
+                if db_pos:
+                    repo = PositionRepository(session)
+                    repo.close(db_pos, pos.exit_price, pos.realized_pnl or 0.0, "signal")
+            else:
+                open_db = (
+                    session.query(PaperPosition)
+                    .filter(PaperPosition.asset_id == asset.id, PaperPosition.is_open.is_(True))
+                    .all()
+                )
+                repo = PositionRepository(session)
+                for db_pos in open_db:
+                    repo.close(db_pos, pos.exit_price, pos.realized_pnl or 0.0, "signal")
+
+            trade_repo = TradeHistoryRepository(session)
+            trade_repo.create(
+                position_id=getattr(pos, "_db_position_id", None),
+                asset_id=asset.id,
+                signal_id=str(signal_id) if signal_id else None,
+                side="BUY",
+                quantity=pos.quantity,
+                entry_price=pos.entry_price,
+                exit_price=pos.exit_price,
+                realized_pnl=round(pos.realized_pnl or 0.0, 2),
+                entry_time=pos.opened_at,
+                exit_time=datetime.now(timezone.utc),
+                close_reason="signal",
+            )
+
+    @classmethod
+    def restore_from_db(cls) -> "PaperPortfolio":
+        portfolio = cls()
+        try:
+            with get_session() as session:
+                open_positions = (
+                    session.query(PaperPosition)
+                    .join(Asset)
+                    .filter(PaperPosition.is_open.is_(True))
+                    .all()
+                )
+
+                closed_positions = (
+                    session.query(PaperPosition)
+                    .join(Asset)
+                    .filter(PaperPosition.is_open.is_(False))
+                    .order_by(PaperPosition.closed_at.asc())
+                    .all()
+                )
+
+                latest_snap = (
+                    session.query(PortfolioSnapshot)
+                    .order_by(PortfolioSnapshot.created_at.desc())
+                    .first()
+                )
+
+                if not open_positions and not closed_positions:
+                    if latest_snap and float(latest_snap.cash_usd) != settings.starting_balance:
+                        logger.info(
+                            "DB has snapshot (equity=$%.2f) but no positions — "
+                            "starting fresh at $%.2f",
+                            float(latest_snap.equity_usd), settings.starting_balance,
+                        )
+                    return portfolio
+
+                balance = settings.starting_balance
+                realized_total = 0.0
+
+                for cp in closed_positions:
+                    entry_val = float(cp.entry_price) * float(cp.quantity)
+                    commission = entry_val * settings.commission_pct
+                    spread = entry_val * settings.spread_pct
+                    cost = entry_val + commission + spread
+                    balance -= cost
+                    proceeds = float(cp.exit_price) * float(cp.quantity)
+                    balance += proceeds
+                    realized_total += float(cp.realized_pnl or 0)
+
+                    closed_pos = Position(
+                        symbol=cp.asset.symbol,
+                        side=cp.side or "BUY",
+                        entry_price=float(cp.entry_price),
+                        quantity=float(cp.quantity),
+                        position_value_usd=entry_val,
+                        commission_usd=commission,
+                        spread_cost_usd=spread,
+                        stop_loss=float(cp.stop_loss or 0),
+                    )
+                    closed_pos.status = "closed"
+                    closed_pos.exit_price = float(cp.exit_price)
+                    closed_pos.realized_pnl = float(cp.realized_pnl or 0)
+                    closed_pos.opened_at = cp.opened_at or datetime.now(timezone.utc)
+                    closed_pos._db_position_id = cp.id
+                    portfolio.closed_trades.append(closed_pos)
+
+                for op in open_positions:
+                    entry_val = float(op.entry_price) * float(op.quantity)
+                    commission = entry_val * settings.commission_pct
+                    spread = entry_val * settings.spread_pct
+                    cost = entry_val + commission + spread
+                    balance -= cost
+
+                    open_pos = Position(
+                        symbol=op.asset.symbol,
+                        side=op.side or "BUY",
+                        entry_price=float(op.entry_price),
+                        quantity=float(op.quantity),
+                        position_value_usd=entry_val,
+                        commission_usd=commission,
+                        spread_cost_usd=spread,
+                        stop_loss=float(op.stop_loss or 0),
+                        signal_id=op.signal_id,
+                    )
+                    open_pos._db_position_id = op.id
+                    open_pos.opened_at = op.opened_at or datetime.now(timezone.utc)
+                    portfolio.positions.append(open_pos)
+
+                portfolio.balance_usd = round(balance, 2)
+                portfolio.realized_pnl_total = round(realized_total, 2)
+
+                if latest_snap:
+                    portfolio.peak_balance = max(
+                        float(latest_snap.equity_usd),
+                        portfolio._get_equity_estimate(),
+                        settings.starting_balance,
+                    )
+                else:
+                    portfolio.peak_balance = max(
+                        portfolio._get_equity_estimate(),
+                        settings.starting_balance,
+                    )
+
+                portfolio._update_challenge_status()
+
+                logger.warning(
+                    "PORTFOLIO_RESTORED from DB: balance=$%.2f realized_pnl=$%.2f "
+                    "open_positions=%d closed_trades=%d peak=$%.2f status=%s",
+                    portfolio.balance_usd, portfolio.realized_pnl_total,
+                    len([p for p in portfolio.positions if p.status == "open"]),
+                    len(portfolio.closed_trades),
+                    portfolio.peak_balance, portfolio.challenge_status,
+                )
+
+        except Exception as e:
+            logger.error("Failed to restore portfolio from DB, starting fresh: %s", e)
+            return cls()
+
+        return portfolio
 
     def _get_equity_estimate(self) -> float:
         position_value = sum(
