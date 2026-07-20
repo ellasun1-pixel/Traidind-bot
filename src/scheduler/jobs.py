@@ -340,7 +340,7 @@ async def market_check_job():
             })
             errors.append(f"{asset.symbol}: {e}")
         if i < len(active_assets) - 1:
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(2.0)
 
     duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -353,9 +353,13 @@ async def market_check_job():
         else:
             sched_repo.mark_success(job_name, duration_ms=duration_ms)
 
+    ok_count = sum(1 for r in asset_results if r.get("status") == "ok")
+    unsafe_count = sum(1 for r in asset_results if r.get("status") == "data_unsafe")
+    err_count = len(errors)
     logger.info(
-        "market_check completed in %dms: %d assets, %d errors",
-        duration_ms, len(asset_results), len(errors),
+        "market_check completed in %dms: %d/%d assets OK, %d data_unsafe, %d errors%s",
+        duration_ms, ok_count, len(active_assets), unsafe_count, err_count,
+        f" — ERRORS: {'; '.join(errors)}" if errors else "",
     )
 
 
