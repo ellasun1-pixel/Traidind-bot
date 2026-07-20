@@ -71,7 +71,9 @@ async def test_cmd_signal_no_signals(mock_update, mock_context):
 
 @pytest.mark.asyncio
 async def test_cmd_history_empty(mock_update, mock_context):
-    await cmd_history(mock_update, mock_context)
+    from src.portfolio.manager import PaperPortfolio
+    with patch("src.telegram_bot.bot.get_portfolio", return_value=PaperPortfolio()):
+        await cmd_history(mock_update, mock_context)
     text = mock_update.message.reply_text.call_args[0][0]
     assert "No completed" in text or "No trades" in text
 

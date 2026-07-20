@@ -42,7 +42,7 @@ _instance_id: str = str(uuid.uuid4())[:8]
 def get_portfolio() -> PaperPortfolio:
     global _portfolio
     if _portfolio is None:
-        _portfolio = PaperPortfolio()
+        _portfolio = PaperPortfolio.restore_from_db()
     return _portfolio
 
 
