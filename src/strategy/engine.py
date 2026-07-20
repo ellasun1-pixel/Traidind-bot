@@ -137,20 +137,6 @@ class StrategyEngine:
                 distance_to_loss=balance - settings.loss_level,
             )
 
-        if balance < 975:
-            return TradeSignal(
-                signal_type="SELL",
-                priority="CRITICAL",
-                asset_symbol=symbol,
-                regime=regime,
-                entry_price=current_price,
-                reason="Balance dangerously close to loss level — exit all risk",
-                explanation="Your balance is near $950 defeat — sell to protect remaining capital",
-                current_balance=balance,
-                distance_to_win=settings.win_level - balance,
-                distance_to_loss=balance - settings.loss_level,
-            )
-
         if balance < 965:
             return TradeSignal(
                 signal_type="MOVE_TO_USD",
@@ -160,6 +146,20 @@ class StrategyEngine:
                 entry_price=current_price,
                 reason="Balance below $965 — move to USD recommended",
                 explanation="Strongly recommended to go fully to cash to avoid defeat",
+                current_balance=balance,
+                distance_to_win=settings.win_level - balance,
+                distance_to_loss=balance - settings.loss_level,
+            )
+
+        if balance < 975:
+            return TradeSignal(
+                signal_type="SELL",
+                priority="CRITICAL",
+                asset_symbol=symbol,
+                regime=regime,
+                entry_price=current_price,
+                reason="Balance dangerously close to loss level — exit all risk",
+                explanation="Your balance is near $950 defeat — sell to protect remaining capital",
                 current_balance=balance,
                 distance_to_win=settings.win_level - balance,
                 distance_to_loss=balance - settings.loss_level,
