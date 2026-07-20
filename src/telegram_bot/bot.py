@@ -14,6 +14,8 @@ from src.config import settings, AgentMode
 from src.scheduler.jobs import get_portfolio, get_last_signals, get_scheduler_status, get_pipeline, record_portfolio_snapshot
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session, AuditLog
+from src.database.models import Signal, Asset
+from src.signals.lifecycle import SignalLifecycle
 from src.auth.owner import owner_only, validate_auth_config
 from src.auth.permissions import Permission, get_user_permissions
 from src.database.session import check_db_health
@@ -155,44 +157,78 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @owner_only
 async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     portfolio = get_portfolio()
-    last_signals = get_last_signals()
 
-    pending = {
-        sym: sig for sym, sig in last_signals.items()
-        if sig.signal_type in ("BUY", "SELL", "REDUCE", "TAKE_PROFIT", "MOVE_TO_USD")
-    }
+    with get_session() as session:
+        lifecycle = SignalLifecycle(session)
+        pending_db = (
+            session.query(Signal)
+            .join(Asset)
+            .filter(Signal.status == "pending")
+            .all()
+        )
 
-    if not pending:
-        await update.message.reply_text("_No pending signals to confirm._", parse_mode="Markdown")
-        return
+        # Separate expired from truly pending
+        from datetime import timezone as tz
+        now = datetime.now(tz.utc)
+        expired = []
+        actionable = []
+        for sig in pending_db:
+            exp = sig.expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=tz.utc)
+            if exp <= now:
+                lifecycle.expire_old_signals()
+                expired.append(sig)
+            else:
+                actionable.append(sig)
 
-    results = []
-    challenge_ended = False
-    for symbol, sig in pending.items():
-        if sig.signal_type == "BUY":
-            ok, msg = portfolio.confirm_buy(
-                symbol=symbol,
-                entry_price=sig.entry_price,
-                position_value_usd=sig.position_size_usd,
-                stop_loss=sig.stop_loss,
-                risk_dollars=sig.max_loss_usd,
+        if not actionable and not expired:
+            await update.message.reply_text("No pending signals to confirm.", parse_mode=None)
+            return
+
+        if not actionable and expired:
+            await update.message.reply_text(
+                f"No pending signals — {len(expired)} signal(s) expired before confirmation.",
+                parse_mode=None,
             )
-            results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
-        elif sig.signal_type in ("SELL", "TAKE_PROFIT", "REDUCE", "MOVE_TO_USD"):
-            ok, msg = portfolio.confirm_sell(
-                symbol=symbol,
-                exit_price=sig.entry_price,
-            )
-            results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
+            return
 
-        if not portfolio.is_challenge_active:
-            challenge_ended = True
+        results = []
+        challenge_ended = False
+        for sig in actionable:
+            symbol = sig.asset.symbol
+            entry_price = float(sig.entry_price) if sig.entry_price else 0.0
+            stop_loss = float(sig.stop_loss) if sig.stop_loss else 0.0
+            position_size = float(sig.position_size_usd) if sig.position_size_usd else 0.0
+            max_loss = float(sig.max_loss_usd) if sig.max_loss_usd else 0.0
 
-    try:
-        with get_session() as session:
-            session.add(AuditLog(action="CONFIRM", actor="owner", detail={"results": results}))
-    except Exception:
-        pass
+            if sig.signal_type == "BUY":
+                ok, msg = portfolio.confirm_buy(
+                    symbol=symbol,
+                    entry_price=entry_price,
+                    position_value_usd=position_size,
+                    stop_loss=stop_loss,
+                    risk_dollars=max_loss,
+                    signal_id=sig.id,
+                )
+                results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
+            elif sig.signal_type in ("SELL", "TAKE_PROFIT", "REDUCE", "MOVE_TO_USD"):
+                ok, msg = portfolio.confirm_sell(
+                    symbol=symbol,
+                    exit_price=entry_price,
+                    signal_id=sig.id,
+                )
+                results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
+            else:
+                continue
+
+            if ok:
+                lifecycle.confirm(sig)
+
+            if not portfolio.is_challenge_active:
+                challenge_ended = True
+
+        session.add(AuditLog(action="CONFIRM", actor="owner", detail={"results": results}))
 
     await update.message.reply_text(
         "\U0001f4cb *Confirmation Results*\n\n" + "\n".join(results),
@@ -208,22 +244,52 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    last_signals = get_last_signals()
-    pending = {
-        sym: sig for sym, sig in last_signals.items()
-        if sig.signal_type in ("BUY", "SELL", "REDUCE", "TAKE_PROFIT", "MOVE_TO_USD")
-    }
-    if not pending:
-        await update.message.reply_text("_No pending signals to reject._", parse_mode="Markdown")
-        return
+    with get_session() as session:
+        lifecycle = SignalLifecycle(session)
+        pending_db = (
+            session.query(Signal)
+            .join(Asset)
+            .filter(Signal.status == "pending")
+            .all()
+        )
 
-    rejected = list(pending.keys())
-    for sym in rejected:
-        del last_signals[sym]
+        from datetime import timezone as tz
+        now = datetime.now(tz.utc)
+        actionable = []
+        expired_count = 0
+        for sig in pending_db:
+            exp = sig.expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=tz.utc)
+            if exp <= now:
+                expired_count += 1
+            else:
+                actionable.append(sig)
+
+        lifecycle.expire_old_signals()
+
+        if not actionable and expired_count == 0:
+            await update.message.reply_text("No pending signals to reject.", parse_mode=None)
+            return
+
+        if not actionable and expired_count > 0:
+            await update.message.reply_text(
+                f"No pending signals — {expired_count} signal(s) already expired.",
+                parse_mode=None,
+            )
+            return
+
+        rejected_symbols = []
+        for sig in actionable:
+            lifecycle.reject(sig)
+            rejected_symbols.append(sig.asset.symbol)
+
+        session.add(AuditLog(action="REJECT", actor="owner",
+                             detail={"rejected": rejected_symbols}))
 
     await update.message.reply_text(
-        f"❌ Rejected signals for: {', '.join(rejected)}",
-        parse_mode="Markdown",
+        f"Rejected signals for: {', '.join(rejected_symbols)}",
+        parse_mode=None,
     )
 
 
