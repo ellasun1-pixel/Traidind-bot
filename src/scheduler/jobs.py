@@ -344,18 +344,24 @@ async def market_check_job():
 
     duration_ms = int((time.monotonic() - start_time) * 1000)
 
+    ok_count = sum(1 for r in asset_results if r.get("status") == "ok")
+    unsafe_count = sum(1 for r in asset_results if r.get("status") == "data_unsafe")
+    err_count = len(errors)
+
     with get_session() as session:
         sched_repo = SchedulerStateRepository(session)
-        if errors:
+        if errors and ok_count == 0:
             sched_repo.mark_failure(
                 job_name, "; ".join(errors), duration_ms=duration_ms,
+            )
+        elif errors:
+            error_summary = f"{ok_count}/{len(active_assets)} OK; errors: {'; '.join(errors)}"
+            sched_repo.mark_partial_success(
+                job_name, error_summary, duration_ms=duration_ms,
             )
         else:
             sched_repo.mark_success(job_name, duration_ms=duration_ms)
 
-    ok_count = sum(1 for r in asset_results if r.get("status") == "ok")
-    unsafe_count = sum(1 for r in asset_results if r.get("status") == "data_unsafe")
-    err_count = len(errors)
     logger.info(
         "market_check completed in %dms: %d/%d assets OK, %d data_unsafe, %d errors%s",
         duration_ms, ok_count, len(active_assets), unsafe_count, err_count,

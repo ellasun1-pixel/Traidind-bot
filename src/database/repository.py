@@ -311,6 +311,22 @@ class SchedulerStateRepository:
         self.session.flush()
         return state
 
+    def mark_partial_success(self, job_name: str, error: str,
+                             duration_ms: int = None) -> SchedulerState:
+        now = datetime.now(timezone.utc)
+        state = self.get_or_create(job_name)
+        state.last_success_at = now
+        state.last_completed_at = now
+        state.current_status = "idle"
+        state.last_error = error
+        state.success_count = (state.success_count or 0) + 1
+        if duration_ms is not None:
+            state.last_duration_ms = duration_ms
+        state.lock_owner = None
+        state.lock_expires_at = None
+        self.session.flush()
+        return state
+
     def mark_failure(self, job_name: str, error: str,
                      duration_ms: int = None) -> SchedulerState:
         now = datetime.now(timezone.utc)
