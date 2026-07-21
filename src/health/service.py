@@ -116,7 +116,9 @@ class HealthService:
                 message="No scheduler state found", checked_at=now,
             )
         stale_count = 0
+        stale_jobs = []
         failed_jobs = []
+        partial_jobs = []
         for s in states:
             last = s.last_success_at or s.last_run_at
             if last:
@@ -124,8 +126,12 @@ class HealthService:
                     last = last.replace(tzinfo=timezone.utc)
                 if (now - last).total_seconds() / 60 > 60:
                     stale_count += 1
+                    stale_jobs.append(s.job_name)
             if s.last_error:
-                failed_jobs.append(s.job_name)
+                if s.last_success_at and s.last_completed_at and s.last_success_at == s.last_completed_at:
+                    partial_jobs.append((s.job_name, s.last_error))
+                else:
+                    failed_jobs.append(s.job_name)
 
         if stale_count > 0 and stale_count == len(states):
             return ComponentHealth(
@@ -136,13 +142,21 @@ class HealthService:
         if failed_jobs:
             return ComponentHealth(
                 name="scheduler", status=HealthStatus.DEGRADED,
-                message=f"Jobs with errors: {', '.join(failed_jobs)}",
+                message=f"Jobs failing: {', '.join(failed_jobs)}",
+                checked_at=now,
+            )
+        if partial_jobs:
+            details = "; ".join(f"{name}: {err}" for name, err in partial_jobs)
+            return ComponentHealth(
+                name="scheduler", status=HealthStatus.DEGRADED,
+                message=f"Partial failures: {details}",
                 checked_at=now,
             )
         if stale_count > 0:
             return ComponentHealth(
                 name="scheduler", status=HealthStatus.DEGRADED,
-                message=f"{stale_count}/{len(states)} jobs stale", checked_at=now,
+                message=f"{stale_count}/{len(states)} jobs stale: {', '.join(stale_jobs)}",
+                checked_at=now,
             )
         active_count = sum(1 for s in states if s.run_count > 0)
         return ComponentHealth(
