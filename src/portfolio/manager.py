@@ -89,6 +89,7 @@ class PaperPortfolio:
         stop_loss: float,
         risk_dollars: float,
         signal_id: Optional[int] = None,
+        prices: Optional[dict[str, float]] = None,
     ) -> tuple[bool, str]:
         if self.challenge_status != "active":
             return False, f"Challenge is {self.challenge_status} — no new trades"
@@ -105,7 +106,7 @@ class PaperPortfolio:
         if not ok:
             return False, reason
 
-        equity = self._get_equity_estimate()
+        equity = self.get_total_equity(prices or {})
         adjusted_value, note = self.risk_manager.apply_circuit_breakers(
             equity, position_value_usd, "BUY"
         )
@@ -137,7 +138,9 @@ class PaperPortfolio:
         )
         self.positions.append(pos)
         self.balance_usd -= total_cost
-        self._update_challenge_status()
+        live_prices = dict(prices or {})
+        live_prices[symbol] = entry_price
+        self._update_challenge_status(live_prices)
 
         try:
             self._persist_buy(pos, signal_id)
@@ -148,7 +151,8 @@ class PaperPortfolio:
         return True, f"Bought {quantity:.6f} {symbol} @ ${entry_price:.2f}"
 
     def confirm_sell(
-        self, symbol: str, exit_price: float, signal_id: Optional[int] = None
+        self, symbol: str, exit_price: float, signal_id: Optional[int] = None,
+        prices: Optional[dict[str, float]] = None,
     ) -> tuple[bool, str]:
         open_pos = [p for p in self.positions if p.status == "open" and p.symbol == symbol]
         if not open_pos:
@@ -168,7 +172,7 @@ class PaperPortfolio:
             except Exception as e:
                 logger.error("Failed to persist SELL to DB: %s", e)
 
-        self._update_challenge_status()
+        self._update_challenge_status(prices or {})
         return True, f"Sold {symbol} @ ${exit_price:.2f}, P&L: ${total_pnl:.2f}"
 
     def get_open_positions(self) -> list[dict]:
@@ -229,8 +233,8 @@ class PaperPortfolio:
     def is_challenge_active(self) -> bool:
         return self.challenge_status == "active"
 
-    def get_challenge_ended_message(self) -> str:
-        equity = self._get_equity_estimate()
+    def get_challenge_ended_message(self, prices: dict[str, float] | None = None) -> str:
+        equity = self.get_total_equity(prices or {})
         if self.challenge_status == "won":
             return (
                 "\U0001f3c6 *CHALLENGE WON!*\n\n"
@@ -252,13 +256,13 @@ class PaperPortfolio:
                 "Use /new\\_challenge to start a fresh attempt."
             )
 
-    def start_new_challenge(self) -> tuple[dict, str]:
+    def start_new_challenge(self, prices: dict[str, float] | None = None) -> tuple[dict, str]:
         """Archive current challenge and start fresh. Returns (archive, message)."""
         archive = {
             "ended_at": datetime.now(timezone.utc).isoformat(),
             "outcome": self.challenge_status,
             "final_balance": round(self.balance_usd, 2),
-            "final_equity": round(self._get_equity_estimate(), 2),
+            "final_equity": round(self.get_total_equity(prices or {}), 2),
             "peak_balance": round(self.peak_balance, 2),
             "realized_pnl": round(self.realized_pnl_total, 2),
             "total_trades": len(self.closed_trades),
@@ -295,11 +299,11 @@ class PaperPortfolio:
         )
         return archive, msg
 
-    def reset_challenge_status(self) -> str:
+    def reset_challenge_status(self, prices: dict[str, float] | None = None) -> str:
         old = self.challenge_status
+        equity = self.get_total_equity(prices or {})
         if old == "won":
-            return f"Challenge already won (equity=${self._get_equity_estimate():.2f}) — cannot reset"
-        equity = self._get_equity_estimate()
+            return f"Challenge already won (equity=${equity:.2f}) — cannot reset"
         if equity >= settings.win_level:
             self.challenge_status = "won"
         elif equity <= settings.loss_level:
@@ -453,15 +457,16 @@ class PaperPortfolio:
                 portfolio.balance_usd = round(balance, 2)
                 portfolio.realized_pnl_total = round(realized_total, 2)
 
+                entry_equity = portfolio.get_total_equity({})
                 if latest_snap:
                     portfolio.peak_balance = max(
                         float(latest_snap.equity_usd),
-                        portfolio._get_equity_estimate(),
+                        entry_equity,
                         settings.starting_balance,
                     )
                 else:
                     portfolio.peak_balance = max(
-                        portfolio._get_equity_estimate(),
+                        entry_equity,
                         settings.starting_balance,
                     )
 
@@ -490,9 +495,9 @@ class PaperPortfolio:
         )
         return self.balance_usd + position_value
 
-    def _update_challenge_status(self) -> str | None:
+    def _update_challenge_status(self, prices: dict[str, float] | None = None) -> str | None:
         """Returns a transition string ('won'/'lost') if challenge just ended, else None."""
-        equity = self._get_equity_estimate()
+        equity = self.get_total_equity(prices or {})
         old_status = self.challenge_status
 
         if equity >= settings.win_level:
