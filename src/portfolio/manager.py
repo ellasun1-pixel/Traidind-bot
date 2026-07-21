@@ -322,6 +322,14 @@ class PaperPortfolio:
                 logger.warning("Asset %s not found in DB, skipping position persist", pos.symbol)
                 return
             repo = PositionRepository(session)
+            existing_open = repo.get_open(asset_id=asset.id)
+            if existing_open:
+                logger.error(
+                    "DB already has %d open position(s) for %s — closing stale rows before persisting new BUY",
+                    len(existing_open), pos.symbol,
+                )
+                for stale in existing_open:
+                    repo.close(stale, pos.entry_price, 0.0, "duplicate_cleanup")
             db_pos = repo.create(
                 asset_id=asset.id,
                 signal_id=str(signal_id) if signal_id else None,
@@ -372,17 +380,52 @@ class PaperPortfolio:
         portfolio = cls()
         try:
             with get_session() as session:
-                open_positions = (
+                all_open = (
                     session.query(PaperPosition)
                     .join(Asset)
                     .filter(PaperPosition.is_open.is_(True))
+                    .order_by(PaperPosition.opened_at.desc())
                     .all()
                 )
+
+                seen_symbols: set[str] = set()
+                open_positions: list[PaperPosition] = []
+                duplicate_count = 0
+                for op in all_open:
+                    symbol = op.asset.symbol
+                    if symbol in seen_symbols:
+                        logger.error(
+                            "DUPLICATE open position id=%s for %s — closing stale row",
+                            op.id, symbol,
+                        )
+                        repo = PositionRepository(session)
+                        repo.close(op, float(op.entry_price), 0.0, "duplicate_cleanup")
+                        duplicate_count += 1
+                        continue
+                    seen_symbols.add(symbol)
+                    open_positions.append(op)
+
+                if len(open_positions) > settings.max_open_positions:
+                    logger.error(
+                        "DB has %d distinct open positions (max %d) — closing excess",
+                        len(open_positions), settings.max_open_positions,
+                    )
+                    excess = open_positions[settings.max_open_positions:]
+                    open_positions = open_positions[:settings.max_open_positions]
+                    repo = PositionRepository(session)
+                    for op in excess:
+                        repo.close(op, float(op.entry_price), 0.0, "excess_cleanup")
+                        duplicate_count += 1
+
+                if duplicate_count:
+                    logger.warning("Cleaned up %d stale/duplicate position rows", duplicate_count)
 
                 closed_positions = (
                     session.query(PaperPosition)
                     .join(Asset)
                     .filter(PaperPosition.is_open.is_(False))
+                    .filter(PaperPosition.close_reason != "duplicate_cleanup")
+                    .filter(PaperPosition.close_reason != "excess_cleanup")
                     .order_by(PaperPosition.closed_at.asc())
                     .all()
                 )
