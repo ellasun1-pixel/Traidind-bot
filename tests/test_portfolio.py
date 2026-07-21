@@ -117,6 +117,54 @@ class TestRiskBudgetEnforcement:
         assert not ok
 
 
+class TestPositionInvariants:
+    """Invariants that must never be violated regardless of signal ordering."""
+
+    def test_duplicate_symbol_blocked(self):
+        p = PaperPortfolio(starting_balance=1050.0)
+        ok1, _ = p.confirm_buy("BTC/USD", 50000, 30, 48500, 1.5)
+        assert ok1
+        ok2, msg = p.confirm_buy("BTC/USD", 51000, 30, 49500, 1.5)
+        assert not ok2
+        assert "duplicate" in msg.lower() or "already" in msg.lower()
+
+    def test_max_open_positions_hard_limit(self):
+        p = PaperPortfolio(starting_balance=1050.0)
+        ok1, _ = p.confirm_buy("BTC/USD", 50000, 30, 48500, 1.5)
+        ok2, _ = p.confirm_buy("ETH/USD", 3000, 30, 2900, 1.5)
+        assert ok1 and ok2
+        ok3, msg = p.confirm_buy("XRP/USD", 0.50, 30, 0.48, 1.5)
+        assert not ok3
+        assert "position" in msg.lower()
+
+    def test_balance_never_negative_after_buy(self):
+        p = PaperPortfolio(starting_balance=1050.0)
+        ok, _ = p.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+        assert ok
+        assert p.balance_usd >= 0
+
+    def test_batch_confirms_respect_limits(self):
+        """Simulates what /confirm does: multiple buys in a loop."""
+        p = PaperPortfolio(starting_balance=1050.0)
+        symbols = ["BTC/USD", "ETH/USD", "XRP/USD", "LINK/USD", "LTC/USD"]
+        confirmed = 0
+        for sym in symbols:
+            ok, _ = p.confirm_buy(sym, 100.0, 30, 97.0, 1.5)
+            if ok:
+                confirmed += 1
+        assert confirmed <= settings.max_open_positions
+        assert p.balance_usd >= 0
+
+    def test_total_invested_never_exceeds_starting_balance(self):
+        p = PaperPortfolio(starting_balance=1000.0)
+        p.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+        p.confirm_buy("ETH/USD", 3000, 100, 2900, 3.0)
+        total_invested = sum(
+            pos.position_value_usd for pos in p.positions if pos.status == "open"
+        )
+        assert total_invested <= p.starting_balance
+
+
 class TestChallengeStatus:
     def test_win_at_1120(self):
         portfolio = PaperPortfolio(starting_balance=1120.0)

@@ -91,6 +91,13 @@ class PaperPortfolio:
             return False, f"Challenge is {self.challenge_status} — no new trades"
 
         open_positions = [p for p in self.positions if p.status == "open"]
+
+        if len(open_positions) >= settings.max_open_positions:
+            return False, f"Maximum open positions ({settings.max_open_positions}) reached"
+
+        if any(p.symbol == symbol for p in open_positions):
+            return False, f"Already holding {symbol} — duplicate position blocked"
+
         total_open_risk = sum(
             abs(p.entry_price - p.stop_loss) * p.quantity
             for p in open_positions if p.stop_loss > 0
@@ -133,6 +140,7 @@ class PaperPortfolio:
         )
         self.positions.append(pos)
         self.balance_usd -= total_cost
+        assert self.balance_usd >= 0, f"Balance went negative after buy: ${self.balance_usd:.2f}"
         self._update_challenge_status()
         logger.info("BUY confirmed: %s %.4f @ $%.2f (value=$%.2f)", symbol, quantity, entry_price, position_value_usd)
         return True, f"Bought {quantity:.6f} {symbol} @ ${entry_price:.2f}"
