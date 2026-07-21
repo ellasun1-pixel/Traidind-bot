@@ -317,3 +317,144 @@ class TestEquityBasedDistances:
 
         assert abs(signal.distance_to_win - (settings.win_level - equity)) < 0.01
         assert abs(signal.distance_to_loss - (equity - settings.loss_level)) < 0.01
+
+
+class TestPortfolioInvariants:
+    """Invariants that must hold regardless of trade sequence."""
+
+    def test_cash_never_negative(self, portfolio):
+        portfolio.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+        portfolio.confirm_buy("ETH/USD", 3000, 100, 2900, 3.0)
+        assert portfolio.balance_usd >= 0, f"Cash went negative: ${portfolio.balance_usd:.2f}"
+
+    def test_open_positions_never_exceed_max(self, portfolio):
+        portfolio.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+        portfolio.confirm_buy("ETH/USD", 3000, 100, 2900, 3.0)
+        ok, msg = portfolio.confirm_buy("LINK/USD", 15, 100, 14, 3.0)
+        assert not ok
+        assert len([p for p in portfolio.positions if p.status == "open"]) <= settings.max_open_positions
+
+    def test_total_cost_never_exceeds_starting_balance(self, portfolio):
+        portfolio.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+        portfolio.confirm_buy("ETH/USD", 3000, 100, 2900, 3.0)
+        open_pos = [p for p in portfolio.positions if p.status == "open"]
+        total_spent = sum(p.position_value_usd + p.commission_usd + p.spread_cost_usd for p in open_pos)
+        assert total_spent <= portfolio.starting_balance, (
+            f"Total spent ${total_spent:.2f} exceeds starting balance ${portfolio.starting_balance:.2f}"
+        )
+
+    def test_cash_plus_positions_equals_equity(self, portfolio):
+        portfolio.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+        open_pos = [p for p in portfolio.positions if p.status == "open"]
+        position_value = sum(p.entry_price * p.quantity for p in open_pos)
+        equity = portfolio.get_total_equity({})
+        assert abs(equity - (portfolio.balance_usd + position_value)) < 0.01
+
+    def test_buy_rejected_when_insufficient_balance(self):
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        ok, _ = portfolio.confirm_buy("BTC/USD", 50000, 500, 48500, 3.0)
+        assert ok
+        ok2, msg2 = portfolio.confirm_buy("ETH/USD", 3000, 600, 2900, 3.0)
+        assert not ok2, "Should reject buy when insufficient balance"
+        assert "insufficient" in msg2.lower()
+        assert portfolio.balance_usd >= 0, f"Cash went negative: ${portfolio.balance_usd:.2f}"
+
+
+class TestRestoreDeduplication:
+    """Verify restore_from_db handles duplicate/excess DB rows."""
+
+    def test_restore_deduplicates_same_symbol(self):
+        from unittest.mock import patch, MagicMock
+        from datetime import datetime, timezone
+
+        mock_positions = []
+        for i in range(3):
+            pos = MagicMock()
+            pos.id = i + 1
+            pos.asset = MagicMock()
+            pos.asset.symbol = "ETH/USD"
+            pos.entry_price = 3000.0
+            pos.quantity = 0.01
+            pos.side = "BUY"
+            pos.stop_loss = 2900.0
+            pos.signal_id = None
+            pos.is_open = True
+            pos.opened_at = datetime(2026, 7, 20, i, 0, tzinfo=timezone.utc)
+            mock_positions.append(pos)
+
+        with patch("src.portfolio.manager.get_session") as mock_get_session:
+            mock_session = MagicMock()
+            mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+
+            mock_query = mock_session.query.return_value
+            mock_join = mock_query.join.return_value
+            mock_filter = mock_join.filter.return_value
+
+            call_count = [0]
+            def side_effect_order_by(*args, **kwargs):
+                call_count[0] += 1
+                result = MagicMock()
+                if call_count[0] == 1:
+                    result.all.return_value = mock_positions
+                else:
+                    result.all.return_value = []
+                    result.first.return_value = None
+                return result
+            mock_filter.order_by = side_effect_order_by
+            mock_filter.filter.return_value.order_by = side_effect_order_by
+
+            portfolio = PaperPortfolio.restore_from_db()
+
+            open_pos = [p for p in portfolio.positions if p.status == "open"]
+            assert len(open_pos) <= 1, f"Expected ≤1 open position, got {len(open_pos)}"
+
+    def test_restore_caps_at_max_positions(self):
+        from unittest.mock import patch, MagicMock
+        from datetime import datetime, timezone
+
+        symbols = ["BTC/USD", "ETH/USD", "LINK/USD", "SOL/USD"]
+        mock_positions = []
+        for i, sym in enumerate(symbols):
+            pos = MagicMock()
+            pos.id = i + 1
+            pos.asset = MagicMock()
+            pos.asset.symbol = sym
+            pos.entry_price = 100.0
+            pos.quantity = 0.1
+            pos.side = "BUY"
+            pos.stop_loss = 90.0
+            pos.signal_id = None
+            pos.is_open = True
+            pos.opened_at = datetime(2026, 7, 20, i, 0, tzinfo=timezone.utc)
+            mock_positions.append(pos)
+
+        with patch("src.portfolio.manager.get_session") as mock_get_session:
+            mock_session = MagicMock()
+            mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+
+            mock_query = mock_session.query.return_value
+            mock_join = mock_query.join.return_value
+            mock_filter = mock_join.filter.return_value
+
+            call_count = [0]
+            def side_effect_order_by(*args, **kwargs):
+                call_count[0] += 1
+                result = MagicMock()
+                if call_count[0] == 1:
+                    result.all.return_value = mock_positions
+                else:
+                    result.all.return_value = []
+                    result.first.return_value = None
+                return result
+            mock_filter.order_by = side_effect_order_by
+            mock_filter.filter.return_value.order_by = side_effect_order_by
+            mock_filter.filter.return_value.filter.return_value.order_by = side_effect_order_by
+
+            portfolio = PaperPortfolio.restore_from_db()
+
+            open_pos = [p for p in portfolio.positions if p.status == "open"]
+            assert len(open_pos) <= settings.max_open_positions, (
+                f"Open positions {len(open_pos)} exceeds max {settings.max_open_positions}"
+            )
