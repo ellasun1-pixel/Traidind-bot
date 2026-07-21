@@ -46,16 +46,38 @@ def get_portfolio() -> PaperPortfolio:
     return _portfolio
 
 
-def record_portfolio_snapshot(trigger: str) -> None:
+async def get_live_prices(symbols: list[str] | None = None) -> dict[str, float]:
+    pipeline = get_pipeline()
+    prices: dict[str, float] = {}
+    target_symbols = symbols or [
+        p.symbol for p in get_portfolio().positions if p.status == "open"
+    ]
+    if not target_symbols:
+        return prices
+    for asset_cfg in settings.assets:
+        if asset_cfg.symbol not in target_symbols:
+            continue
+        try:
+            kraken_q, coinbase_q = await pipeline.get_prices(asset_cfg)
+            quote = kraken_q or coinbase_q
+            if quote:
+                prices[asset_cfg.symbol] = quote.price
+        except Exception as e:
+            logger.warning("Live price fetch failed for %s: %s", asset_cfg.symbol, e)
+    return prices
+
+
+def record_portfolio_snapshot(trigger: str, prices: dict[str, float] | None = None) -> None:
     portfolio = get_portfolio()
     open_pos = portfolio.get_open_positions()
+    equity = portfolio.get_total_equity(prices or {})
     try:
         with get_session() as session:
             repo = PortfolioSnapshotRepository(session)
             repo.record(
                 trigger=trigger,
                 cash_usd=portfolio.balance_usd,
-                equity_usd=portfolio._get_equity_estimate(),
+                equity_usd=equity,
                 realized_pnl=portfolio.realized_pnl_total,
                 open_positions_count=len(open_pos),
                 open_positions_summary=open_pos or None,
@@ -196,7 +218,10 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
     portfolio = get_portfolio()
     open_positions = portfolio.get_open_positions()
     total_risk = portfolio.get_total_open_risk()
-    equity = portfolio._get_equity_estimate()
+
+    prices = await get_live_prices()
+    prices[asset.symbol] = safety.current_price
+    equity = portfolio.get_total_equity(prices)
 
     signal = engine.analyze(
         symbol=asset.symbol,

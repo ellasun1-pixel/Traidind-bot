@@ -11,7 +11,7 @@ from telegram.ext import (
 )
 
 from src.config import settings, AgentMode
-from src.scheduler.jobs import get_portfolio, get_last_signals, get_scheduler_status, get_pipeline, record_portfolio_snapshot
+from src.scheduler.jobs import get_portfolio, get_last_signals, get_scheduler_status, get_pipeline, record_portfolio_snapshot, get_live_prices
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session, AuditLog
 from src.database.models import Signal, Asset
@@ -85,7 +85,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         portfolio = get_portfolio()
         last_signals = get_last_signals()
-        equity = portfolio._get_equity_estimate()
+        prices = await get_live_prices()
+        equity = portfolio.get_total_equity(prices)
+
+        portfolio._update_challenge_status(prices)
 
         status_lines = [
             "\U0001f4ca *Status*",
@@ -118,7 +121,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @owner_only
 async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     portfolio = get_portfolio()
-    prices = {}
+    prices = await get_live_prices()
     summary = portfolio.get_portfolio_summary(prices)
     text = formatter.format_portfolio_summary(summary)
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -157,6 +160,7 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @owner_only
 async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     portfolio = get_portfolio()
+    prices = await get_live_prices()
 
     with get_session() as session:
         lifecycle = SignalLifecycle(session)
@@ -167,7 +171,6 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             .all()
         )
 
-        # Separate expired from truly pending
         from datetime import timezone as tz
         now = datetime.now(tz.utc)
         expired = []
@@ -210,6 +213,7 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     stop_loss=stop_loss,
                     risk_dollars=max_loss,
                     signal_id=sig.id,
+                    prices=prices,
                 )
                 results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
             elif sig.signal_type in ("SELL", "TAKE_PROFIT", "REDUCE", "MOVE_TO_USD"):
@@ -217,6 +221,7 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     symbol=symbol,
                     exit_price=entry_price,
                     signal_id=sig.id,
+                    prices=prices,
                 )
                 results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
             else:
@@ -235,10 +240,10 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-    record_portfolio_snapshot("trade_confirm")
+    record_portfolio_snapshot("trade_confirm", prices=prices)
 
     if challenge_ended:
-        ended_msg = portfolio.get_challenge_ended_message()
+        ended_msg = portfolio.get_challenge_ended_message(prices=prices)
         await update.message.reply_text(ended_msg, parse_mode="Markdown")
 
 
@@ -573,7 +578,8 @@ async def _debug_asset(pipeline, asset) -> str:
     lines.append("")
     lines.append("*BUY gate checks*")
     portfolio = get_portfolio()
-    equity = portfolio._get_equity_estimate()
+    prices = await get_live_prices()
+    equity = portfolio.get_total_equity(prices)
     open_pos = portfolio.get_open_positions()
     existing = [p for p in open_pos if p.get("symbol") == asset.symbol]
 
