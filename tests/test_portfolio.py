@@ -180,12 +180,12 @@ class TestChallengeStatus:
         portfolio._update_challenge_status()
         assert portfolio.challenge_status == "lost"
 
-    def test_lost_recovers_to_active(self):
-        """Lost status recovers when equity returns above loss_level."""
+    def test_lost_is_terminal(self):
+        """Lost status is permanent — only /new_challenge can reset it."""
         portfolio = PaperPortfolio(starting_balance=1000.0)
         portfolio.challenge_status = "lost"
         portfolio._update_challenge_status()
-        assert portfolio.challenge_status == "active"
+        assert portfolio.challenge_status == "lost"
 
     def test_won_is_terminal(self):
         """Won status does not revert to active."""

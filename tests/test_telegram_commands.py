@@ -477,3 +477,161 @@ def test_challenge_engine_docstring_says_2_positions():
     import src.strategy.challenge_engine as ce
     assert "up to 2" in ce.__doc__ or "2 open positions" in ce.__doc__
     assert "up to 3" not in ce.__doc__
+
+
+# --- Bug: lost challenge must never auto-resurrect ---
+
+
+def test_lost_challenge_stays_lost_after_equity_recovery():
+    from src.portfolio.manager import PaperPortfolio
+    p = PaperPortfolio()
+    p.balance_usd = 940.0
+    p.challenge_status = "active"
+
+    p._update_challenge_status(prices={})
+    assert p.challenge_status == "lost"
+
+    p.balance_usd = 1000.0
+    p._update_challenge_status(prices={})
+    assert p.challenge_status == "lost", (
+        "Lost challenge must remain lost even if equity recovers above $950"
+    )
+
+
+def test_won_challenge_stays_won_after_equity_drop():
+    from src.portfolio.manager import PaperPortfolio
+    p = PaperPortfolio()
+    p.balance_usd = 1130.0
+    p.challenge_status = "active"
+
+    p._update_challenge_status(prices={})
+    assert p.challenge_status == "won"
+
+    p.balance_usd = 1000.0
+    p._update_challenge_status(prices={})
+    assert p.challenge_status == "won", (
+        "Won challenge must remain won even if equity drops below $1,120"
+    )
+
+
+# --- Bug: cmd_pause and cmd_resume missing outer crash protection ---
+
+
+@pytest.mark.asyncio
+async def test_cmd_pause_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.settings") as mock_settings:
+        type(mock_settings).agent_mode = property(
+            lambda s: (_ for _ in ()).throw(RuntimeError("crash"))
+        )
+        await cmd_pause(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Pause error" in text or "crash" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_resume_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.settings") as mock_settings:
+        type(mock_settings).agent_mode = property(
+            lambda s: (_ for _ in ()).throw(RuntimeError("crash"))
+        )
+        await cmd_resume(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Resume error" in text or "crash" in text
+
+
+# --- /status display: merge DB + in-memory signals ---
+
+
+@pytest.mark.asyncio
+async def test_cmd_status_merges_db_and_inmemory_signals(mock_update, mock_context):
+    """All 9 assets should appear in /status, even when DB only has some."""
+    from src.strategy.engine import TradeSignal
+    from src.strategy.regime import MarketRegime
+
+    mock_portfolio = MagicMock()
+    mock_portfolio.get_total_equity.return_value = 1010.0
+    mock_portfolio.balance_usd = 1010.0
+    mock_portfolio.challenge_status = "active"
+    mock_portfolio.positions = []
+
+    in_memory_signals = {
+        "XRP/USD": TradeSignal(
+            signal_type="NO_TRADE", priority="MEDIUM",
+            asset_symbol="XRP/USD", regime=MarketRegime.CHOP,
+        ),
+        "BTC/USD": TradeSignal(
+            signal_type="BUY", priority="HIGH",
+            asset_symbol="BTC/USD", regime=MarketRegime.TREND,
+        ),
+    }
+
+    mock_signal = MagicMock()
+    mock_signal.asset_id = 1
+    mock_signal.asset.symbol = "BTC/USD"
+    mock_signal.regime = "TREND"
+    mock_signal.signal_type = "BUY"
+    mock_signal.created_at = MagicMock()
+
+    with patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
+         patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock, return_value={}), \
+         patch("src.telegram_bot.bot.get_session") as mock_gs, \
+         patch("src.telegram_bot.bot.get_last_signals", return_value=in_memory_signals):
+
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+        mock_subq = MagicMock()
+        mock_session.query.return_value.group_by.return_value.subquery.return_value = mock_subq
+        mock_session.query.return_value.join.return_value.join.return_value.all.return_value = [mock_signal]
+
+        await cmd_status(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "XRP/USD" in text, "In-memory NO_TRADE asset must appear in /status"
+    assert "BTC/USD" in text, "DB asset must appear in /status"
+
+
+@pytest.mark.asyncio
+async def test_cmd_status_db_overrides_inmemory_for_same_asset(mock_update, mock_context):
+    """When both DB and in-memory have a signal for the same asset, DB wins."""
+    from src.strategy.engine import TradeSignal
+    from src.strategy.regime import MarketRegime
+
+    mock_portfolio = MagicMock()
+    mock_portfolio.get_total_equity.return_value = 1010.0
+    mock_portfolio.balance_usd = 1010.0
+    mock_portfolio.challenge_status = "active"
+    mock_portfolio.positions = []
+
+    in_memory_signals = {
+        "BTC/USD": TradeSignal(
+            signal_type="NO_TRADE", priority="MEDIUM",
+            asset_symbol="BTC/USD", regime=MarketRegime.CHOP,
+        ),
+    }
+
+    mock_signal = MagicMock()
+    mock_signal.asset_id = 1
+    mock_signal.asset.symbol = "BTC/USD"
+    mock_signal.regime = "TREND"
+    mock_signal.signal_type = "BUY"
+    mock_signal.created_at = MagicMock()
+
+    with patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
+         patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock, return_value={}), \
+         patch("src.telegram_bot.bot.get_session") as mock_gs, \
+         patch("src.telegram_bot.bot.get_last_signals", return_value=in_memory_signals):
+
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+        mock_subq = MagicMock()
+        mock_session.query.return_value.group_by.return_value.subquery.return_value = mock_subq
+        mock_session.query.return_value.join.return_value.join.return_value.all.return_value = [mock_signal]
+
+        await cmd_status(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "BUY" in text, "DB signal (BUY) should override in-memory (NO_TRADE)"

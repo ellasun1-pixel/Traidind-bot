@@ -115,7 +115,14 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        last_signals = db_signals or get_last_signals()
+        in_memory = get_last_signals()
+        last_signals: dict = {}
+        for symbol, val in in_memory.items():
+            last_signals[symbol] = (
+                val.regime.value if val.regime else "UNKNOWN",
+                val.signal_type,
+            )
+        last_signals.update(db_signals)
         if last_signals:
             status_lines.append("*Latest regimes:*")
             for symbol, val in last_signals.items():
@@ -359,44 +366,58 @@ async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from src.database.repository import AppSettingRepository
-    previous_mode = settings.agent_mode.value
-    settings.agent_mode = AgentMode.PAUSED
     try:
-        with get_session() as session:
-            repo = AppSettingRepository(session)
-            repo.set("agent_mode", AgentMode.PAUSED.value)
-            repo.set("pre_pause_mode", previous_mode)
+        from src.database.repository import AppSettingRepository
+        previous_mode = settings.agent_mode.value
+        settings.agent_mode = AgentMode.PAUSED
+        try:
+            with get_session() as session:
+                repo = AppSettingRepository(session)
+                repo.set("agent_mode", AgentMode.PAUSED.value)
+                repo.set("pre_pause_mode", previous_mode)
+        except Exception as e:
+            logger.error("Failed to persist pause state: %s", e)
+        await update.message.reply_text(
+            "⏸️ Agent paused. Market observation continues but no signals will be sent.\n"
+            "Use /resume to continue.",
+            parse_mode="Markdown",
+        )
     except Exception as e:
-        logger.error("Failed to persist pause state: %s", e)
-    await update.message.reply_text(
-        "⏸️ Agent paused. Market observation continues but no signals will be sent.\n"
-        "Use /resume to continue.",
-        parse_mode="Markdown",
-    )
+        logger.error("cmd_pause crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Pause error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
 async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from src.database.repository import AppSettingRepository
-    restored_mode = AgentMode.PAPER_CHALLENGE
     try:
-        with get_session() as session:
-            repo = AppSettingRepository(session)
-            saved = repo.get("pre_pause_mode")
-            if saved:
-                try:
-                    restored_mode = AgentMode(saved)
-                except ValueError:
-                    pass
-            repo.set("agent_mode", restored_mode.value)
+        from src.database.repository import AppSettingRepository
+        restored_mode = AgentMode.PAPER_CHALLENGE
+        try:
+            with get_session() as session:
+                repo = AppSettingRepository(session)
+                saved = repo.get("pre_pause_mode")
+                if saved:
+                    try:
+                        restored_mode = AgentMode(saved)
+                    except ValueError:
+                        pass
+                repo.set("agent_mode", restored_mode.value)
+        except Exception as e:
+            logger.error("Failed to persist resume state: %s", e)
+        settings.agent_mode = restored_mode
+        await update.message.reply_text(
+            f"▶️ Agent resumed in {restored_mode.value} mode.",
+            parse_mode="Markdown",
+        )
     except Exception as e:
-        logger.error("Failed to persist resume state: %s", e)
-    settings.agent_mode = restored_mode
-    await update.message.reply_text(
-        f"▶️ Agent resumed in {restored_mode.value} mode.",
-        parse_mode="Markdown",
-    )
+        logger.error("cmd_resume crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Resume error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
