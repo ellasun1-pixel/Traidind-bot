@@ -106,6 +106,12 @@ class RiskManager:
             note = "Near win: min 80% in USD" if adjusted < position_value_usd else ""
             return adjusted, note
 
+        if balance >= 1050:
+            max_value = balance * 0.50
+            adjusted = min(position_value_usd, max_value)
+            note = "Protect profit: max 50% deployed" if adjusted < position_value_usd else ""
+            return adjusted, note
+
         if balance < 1050:
             max_value = balance * 0.50
             adjusted = min(position_value_usd, max_value)

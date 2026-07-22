@@ -39,7 +39,7 @@ class ChallengeConfig:
     risk_per_trade_pct: float = 0.005
     risk_per_trade_pct_cautious: float = 0.003
     max_total_open_risk_pct: float = 0.015
-    max_open_positions: int = 3
+    max_open_positions: int = 2
     take_profit_multiple: float = 2.0
     vertical_spike_pct: float = 0.08
     commission_pct: float = 0.0026
