@@ -712,6 +712,11 @@ async def startup_sweep():
                 except ValueError:
                     logger.warning("Unknown saved agent_mode '%s', keeping default", saved_mode)
 
+            saved_beginner = setting_repo.get("beginner_explanations")
+            if saved_beginner is not None:
+                settings.beginner_explanations = saved_beginner.lower() in ("true", "1")
+                logger.info("Restored beginner_explanations=%s from DB", settings.beginner_explanations)
+
     except Exception as e:
         logger.error("Startup sweep failed: %s", e, exc_info=True)
 

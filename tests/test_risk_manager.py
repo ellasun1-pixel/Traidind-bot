@@ -1,5 +1,5 @@
 import pytest
-from src.risk.manager import RiskManager, PositionSizeResult
+from src.risk.manager import RiskManager
 from src.config import settings
 
 
@@ -8,48 +8,19 @@ def rm():
     return RiskManager()
 
 
-class TestPositionSizing:
-    def test_basic_position_size(self, rm):
-        result = rm.calculate_position_size(
-            risk_pct=0.003,
-            entry_price=50000.0,
-            stop_loss_price=48500.0,
-        )
-        assert result.approved
-        expected_risk = 1000.0 * 0.003
-        stop_dist = abs(50000 - 48500) / 50000
-        expected_value = expected_risk / stop_dist
-        assert abs(result.position_value_usd - expected_value) < 0.01
-        assert abs(result.risk_dollars - expected_risk) < 0.01
+class TestDeadCodeRemoved:
+    """Fix #16: calculate_position_size and PositionSizeResult should not exist."""
 
-    def test_position_size_formula(self, rm):
-        result = rm.calculate_position_size(
-            risk_pct=0.004,
-            entry_price=100.0,
-            stop_loss_price=97.0,
+    def test_no_calculate_position_size(self, rm):
+        assert not hasattr(rm, "calculate_position_size"), (
+            "calculate_position_size is dead code — the engine computes position size inline"
         )
-        assert result.approved
-        risk_dollars = 1000.0 * 0.004
-        stop_distance = 3.0 / 100.0
-        expected_value = risk_dollars / stop_distance
-        assert abs(result.position_value_usd - round(expected_value, 2)) < 0.01
-        assert abs(result.quantity - round(expected_value / 100.0, 8)) < 0.0001
 
-    def test_zero_stop_distance(self, rm):
-        result = rm.calculate_position_size(
-            risk_pct=0.003,
-            entry_price=100.0,
-            stop_loss_price=100.0,
+    def test_no_position_size_result_class(self):
+        import src.risk.manager as mod
+        assert not hasattr(mod, "PositionSizeResult"), (
+            "PositionSizeResult is dead code — removed with calculate_position_size"
         )
-        assert not result.approved
-
-    def test_invalid_prices(self, rm):
-        result = rm.calculate_position_size(
-            risk_pct=0.003,
-            entry_price=0,
-            stop_loss_price=100.0,
-        )
-        assert not result.approved
 
 
 class TestRiskBudget:

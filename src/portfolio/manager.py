@@ -330,12 +330,17 @@ class PaperPortfolio:
         equity = self.get_total_equity(prices or {})
         if old == "won":
             return f"Challenge already won (equity=${equity:.2f}) — cannot reset"
+        if old == "lost":
+            return (
+                f"Challenge is lost (equity=${equity:.2f}) — cannot resurrect. "
+                "Use /new_challenge to start a fresh attempt."
+            )
         if equity >= settings.win_level:
             self.challenge_status = "won"
         elif equity <= settings.loss_level:
             self.challenge_status = "lost"
         else:
-            self.challenge_status = "active"
+            return f"Challenge status unchanged: {old} (equity=${equity:.2f})"
         logger.warning(
             "CHALLENGE_RESET %s→%s equity=%.2f", old, self.challenge_status, equity,
         )
