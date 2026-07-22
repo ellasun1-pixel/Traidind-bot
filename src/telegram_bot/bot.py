@@ -155,178 +155,206 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    last_signals = get_last_signals()
-    if not last_signals:
-        await update.message.reply_text("_No signals generated yet._", parse_mode="Markdown")
-        return
+    try:
+        last_signals = get_last_signals()
+        if not last_signals:
+            await update.message.reply_text("_No signals generated yet._", parse_mode="Markdown")
+            return
 
-    for symbol, sig in last_signals.items():
-        text = formatter.format_signal(sig)
-        await update.message.reply_text(text, parse_mode="Markdown")
+        for symbol, sig in last_signals.items():
+            text = formatter.format_signal(sig)
+            await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_signal crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Signal error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    portfolio = get_portfolio()
-    if not portfolio.closed_trades:
-        await update.message.reply_text("_No completed trades yet._", parse_mode="Markdown")
-        return
+    try:
+        portfolio = get_portfolio()
+        if not portfolio.closed_trades:
+            await update.message.reply_text("_No completed trades yet._", parse_mode="Markdown")
+            return
 
-    lines = ["\U0001f4dc *Trade History*", ""]
-    for trade in portfolio.closed_trades[-10:]:
-        pnl = trade.realized_pnl or 0
-        emoji = "\U0001f7e2" if pnl >= 0 else "\U0001f534"
-        lines.append(
-            f"{emoji} {trade.symbol}: {trade.quantity:.6f} @ ${trade.entry_price:.2f} "
-            f"→ ${trade.exit_price:.2f} | P&L: ${pnl:.2f}"
-        )
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        lines = ["\U0001f4dc *Trade History*", ""]
+        for trade in portfolio.closed_trades[-10:]:
+            pnl = trade.realized_pnl or 0
+            emoji = "\U0001f7e2" if pnl >= 0 else "\U0001f534"
+            lines.append(
+                f"{emoji} {trade.symbol}: {trade.quantity:.6f} @ ${trade.entry_price:.2f} "
+                f"→ ${trade.exit_price:.2f} | P&L: ${pnl:.2f}"
+            )
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_history crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"History error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
 async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    portfolio = get_portfolio()
-    prices = await get_live_prices()
+    try:
+        portfolio = get_portfolio()
+        prices = await get_live_prices()
 
-    with get_session() as session:
-        lifecycle = SignalLifecycle(session)
-        lifecycle.expire_old_signals()
+        with get_session() as session:
+            lifecycle = SignalLifecycle(session)
+            lifecycle.expire_old_signals()
 
-        pending_db = (
-            session.query(Signal)
-            .join(Asset)
-            .filter(Signal.status == "pending")
-            .all()
+            pending_db = (
+                session.query(Signal)
+                .join(Asset)
+                .filter(Signal.status == "pending")
+                .all()
+            )
+
+            from datetime import timezone as tz
+            now = datetime.now(tz.utc)
+            expired = []
+            actionable = []
+            for sig in pending_db:
+                exp = sig.expires_at
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=tz.utc)
+                if exp <= now:
+                    expired.append(sig)
+                else:
+                    actionable.append(sig)
+
+            if not actionable and not expired:
+                await update.message.reply_text("No pending signals to confirm.", parse_mode=None)
+                return
+
+            if not actionable and expired:
+                await update.message.reply_text(
+                    f"No pending signals — {len(expired)} signal(s) expired before confirmation.",
+                    parse_mode=None,
+                )
+                return
+
+            results = []
+            challenge_ended = False
+            for sig in actionable:
+                symbol = sig.asset.symbol
+                entry_price = float(sig.entry_price) if sig.entry_price else 0.0
+                stop_loss = float(sig.stop_loss) if sig.stop_loss else 0.0
+                position_size = float(sig.position_size_usd) if sig.position_size_usd else 0.0
+                max_loss = float(sig.max_loss_usd) if sig.max_loss_usd else 0.0
+
+                if sig.signal_type == "BUY":
+                    ok, msg = portfolio.confirm_buy(
+                        symbol=symbol,
+                        entry_price=entry_price,
+                        position_value_usd=position_size,
+                        stop_loss=stop_loss,
+                        risk_dollars=max_loss,
+                        signal_id=sig.id,
+                        prices=prices,
+                    )
+                    results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
+                elif sig.signal_type in ("SELL", "TAKE_PROFIT", "REDUCE", "MOVE_TO_USD"):
+                    ok, msg = portfolio.confirm_sell(
+                        symbol=symbol,
+                        exit_price=entry_price,
+                        signal_id=sig.id,
+                        prices=prices,
+                    )
+                    results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
+                else:
+                    continue
+
+                if ok:
+                    try:
+                        lifecycle.confirm(sig)
+                    except InvalidTransitionError as e:
+                        logger.warning("Signal %s expired mid-confirm: %s", sig.id, e)
+                        results[-1] = f"⚠️ {symbol}: Signal expired before confirmation could complete"
+
+                if not portfolio.is_challenge_active:
+                    challenge_ended = True
+
+            session.add(AuditLog(action="CONFIRM", actor="owner", detail={"results": results}))
+
+        await update.message.reply_text(
+            "\U0001f4cb *Confirmation Results*\n\n" + "\n".join(results),
+            parse_mode="Markdown",
         )
 
-        from datetime import timezone as tz
-        now = datetime.now(tz.utc)
-        expired = []
-        actionable = []
-        for sig in pending_db:
-            exp = sig.expires_at
-            if exp.tzinfo is None:
-                exp = exp.replace(tzinfo=tz.utc)
-            if exp <= now:
-                expired.append(sig)
-            else:
-                actionable.append(sig)
+        record_portfolio_snapshot("trade_confirm", prices=prices)
 
-        if not actionable and not expired:
-            await update.message.reply_text("No pending signals to confirm.", parse_mode=None)
-            return
-
-        if not actionable and expired:
-            await update.message.reply_text(
-                f"No pending signals — {len(expired)} signal(s) expired before confirmation.",
-                parse_mode=None,
-            )
-            return
-
-        results = []
-        challenge_ended = False
-        for sig in actionable:
-            symbol = sig.asset.symbol
-            entry_price = float(sig.entry_price) if sig.entry_price else 0.0
-            stop_loss = float(sig.stop_loss) if sig.stop_loss else 0.0
-            position_size = float(sig.position_size_usd) if sig.position_size_usd else 0.0
-            max_loss = float(sig.max_loss_usd) if sig.max_loss_usd else 0.0
-
-            if sig.signal_type == "BUY":
-                ok, msg = portfolio.confirm_buy(
-                    symbol=symbol,
-                    entry_price=entry_price,
-                    position_value_usd=position_size,
-                    stop_loss=stop_loss,
-                    risk_dollars=max_loss,
-                    signal_id=sig.id,
-                    prices=prices,
-                )
-                results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
-            elif sig.signal_type in ("SELL", "TAKE_PROFIT", "REDUCE", "MOVE_TO_USD"):
-                ok, msg = portfolio.confirm_sell(
-                    symbol=symbol,
-                    exit_price=entry_price,
-                    signal_id=sig.id,
-                    prices=prices,
-                )
-                results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
-            else:
-                continue
-
-            if ok:
-                try:
-                    lifecycle.confirm(sig)
-                except InvalidTransitionError as e:
-                    logger.warning("Signal %s expired mid-confirm: %s", sig.id, e)
-                    results[-1] = f"⚠️ {symbol}: Signal expired before confirmation could complete"
-
-            if not portfolio.is_challenge_active:
-                challenge_ended = True
-
-        session.add(AuditLog(action="CONFIRM", actor="owner", detail={"results": results}))
-
-    await update.message.reply_text(
-        "\U0001f4cb *Confirmation Results*\n\n" + "\n".join(results),
-        parse_mode="Markdown",
-    )
-
-    record_portfolio_snapshot("trade_confirm", prices=prices)
-
-    if challenge_ended:
-        ended_msg = portfolio.get_challenge_ended_message(prices=prices)
-        await update.message.reply_text(ended_msg, parse_mode="Markdown")
+        if challenge_ended:
+            ended_msg = portfolio.get_challenge_ended_message(prices=prices)
+            await update.message.reply_text(ended_msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_confirm crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Confirm error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
 async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    with get_session() as session:
-        lifecycle = SignalLifecycle(session)
-        pending_db = (
-            session.query(Signal)
-            .join(Asset)
-            .filter(Signal.status == "pending")
-            .all()
-        )
-
-        from datetime import timezone as tz
-        now = datetime.now(tz.utc)
-        actionable = []
-        expired_count = 0
-        for sig in pending_db:
-            exp = sig.expires_at
-            if exp.tzinfo is None:
-                exp = exp.replace(tzinfo=tz.utc)
-            if exp <= now:
-                expired_count += 1
-            else:
-                actionable.append(sig)
-
-        lifecycle.expire_old_signals()
-
-        if not actionable and expired_count == 0:
-            await update.message.reply_text("No pending signals to reject.", parse_mode=None)
-            return
-
-        if not actionable and expired_count > 0:
-            await update.message.reply_text(
-                f"No pending signals — {expired_count} signal(s) already expired.",
-                parse_mode=None,
+    try:
+        with get_session() as session:
+            lifecycle = SignalLifecycle(session)
+            pending_db = (
+                session.query(Signal)
+                .join(Asset)
+                .filter(Signal.status == "pending")
+                .all()
             )
-            return
 
-        rejected_symbols = []
-        for sig in actionable:
-            lifecycle.reject(sig)
-            rejected_symbols.append(sig.asset.symbol)
+            from datetime import timezone as tz
+            now = datetime.now(tz.utc)
+            actionable = []
+            expired_count = 0
+            for sig in pending_db:
+                exp = sig.expires_at
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=tz.utc)
+                if exp <= now:
+                    expired_count += 1
+                else:
+                    actionable.append(sig)
 
-        session.add(AuditLog(action="REJECT", actor="owner",
-                             detail={"rejected": rejected_symbols}))
+            lifecycle.expire_old_signals()
 
-    await update.message.reply_text(
-        f"Rejected signals for: {', '.join(rejected_symbols)}",
-        parse_mode=None,
-    )
+            if not actionable and expired_count == 0:
+                await update.message.reply_text("No pending signals to reject.", parse_mode=None)
+                return
+
+            if not actionable and expired_count > 0:
+                await update.message.reply_text(
+                    f"No pending signals — {expired_count} signal(s) already expired.",
+                    parse_mode=None,
+                )
+                return
+
+            rejected_symbols = []
+            for sig in actionable:
+                lifecycle.reject(sig)
+                rejected_symbols.append(sig.asset.symbol)
+
+            session.add(AuditLog(action="REJECT", actor="owner",
+                                 detail={"rejected": rejected_symbols}))
+
+        await update.message.reply_text(
+            f"Rejected signals for: {', '.join(rejected_symbols)}",
+            parse_mode=None,
+        )
+    except Exception as e:
+        logger.error("cmd_reject crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Reject error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
@@ -373,88 +401,123 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if args and len(args) >= 2:
-        key = args[0].lower()
-        value = args[1].lower()
-        if key == "beginner":
-            settings.beginner_explanations = value in ("true", "1", "on", "yes")
-            await update.message.reply_text(
-                f"✅ BEGINNER_EXPLANATIONS = {settings.beginner_explanations}",
-                parse_mode="Markdown",
-            )
-            return
+    try:
+        args = context.args
+        if args and len(args) >= 2:
+            key = args[0].lower()
+            value = args[1].lower()
+            if key == "beginner":
+                settings.beginner_explanations = value in ("true", "1", "on", "yes")
+                try:
+                    from src.database.repository import AppSettingRepository
+                    with get_session() as session:
+                        repo = AppSettingRepository(session)
+                        repo.set("beginner_explanations", str(settings.beginner_explanations))
+                except Exception as e:
+                    logger.error("Failed to persist beginner_explanations: %s", e)
+                await update.message.reply_text(
+                    f"✅ BEGINNER_EXPLANATIONS = {settings.beginner_explanations}",
+                    parse_mode="Markdown",
+                )
+                return
 
-    text = (
-        "⚙️ *Settings*\n\n"
-        f"Mode: {_esc(settings.agent_mode.value)}\n"
-        f"Beginner explanations: {settings.beginner_explanations}\n"
-        f"Timezone: {settings.timezone}\n"
-        f"Active hours: {settings.active_hours_start}:00–{settings.active_hours_end}:00\n"
-        f"Check interval: {settings.check_interval_minutes} min\n"
-        f"Assets: {', '.join(a.symbol for a in settings.assets)}\n"
-        "\nToggle: /settings beginner true|false"
-    )
-    await update.message.reply_text(text, parse_mode="Markdown")
+        text = (
+            "⚙️ *Settings*\n\n"
+            f"Mode: {_esc(settings.agent_mode.value)}\n"
+            f"Beginner explanations: {settings.beginner_explanations}\n"
+            f"Timezone: {settings.timezone}\n"
+            f"Active hours: {settings.active_hours_start}:00–{settings.active_hours_end}:00\n"
+            f"Check interval: {settings.check_interval_minutes} min\n"
+            f"Assets: {', '.join(a.symbol for a in settings.assets)}\n"
+            "\nToggle: /settings beginner true|false"
+        )
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_settings crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Settings error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
 async def cmd_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat = update.effective_chat
-    user_perms = get_user_permissions(user.id)
-    db_health = check_db_health()
-    env = settings.app_env
+    try:
+        user = update.effective_user
+        chat = update.effective_chat
+        user_perms = get_user_permissions(user.id)
+        db_health = check_db_health()
+        env = settings.app_env
 
-    perm_lines = "\n".join(f"  {p.value}" for p in Permission if p in user_perms)
+        perm_lines = "\n".join(f"  {p.value}" for p in Permission if p in user_perms)
 
-    text = (
-        "\U0001f510 *Authentication Status*\n\n"
-        f"Owner: Authorized\n"
-        f"Telegram User ID: `{user.id}`\n"
-        f"Chat ID: `{chat.id}`\n"
-        f"Environment: {env.capitalize()}\n\n"
-        f"*Permissions:*\n{perm_lines}\n\n"
-        f"Database: {'Connected' if db_health['status'] == 'ok' else 'Error'}\n"
-        f"Bot: Running\n"
-        f"Strategy Version: {settings.strategy_version}"
-    )
-    await update.message.reply_text(text, parse_mode="Markdown")
+        text = (
+            "\U0001f510 *Authentication Status*\n\n"
+            f"Owner: Authorized\n"
+            f"Telegram User ID: `{user.id}`\n"
+            f"Chat ID: `{chat.id}`\n"
+            f"Environment: {env.capitalize()}\n\n"
+            f"*Permissions:*\n{perm_lines}\n\n"
+            f"Database: {'Connected' if db_health['status'] == 'ok' else 'Error'}\n"
+            f"Bot: Running\n"
+            f"Strategy Version: {settings.strategy_version}"
+        )
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_auth crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Auth error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
 async def cmd_scheduler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    statuses = get_scheduler_status()
-    if not statuses:
-        await update.message.reply_text("_No scheduler data yet._", parse_mode="Markdown")
-        return
+    try:
+        statuses = get_scheduler_status()
+        if not statuses:
+            await update.message.reply_text("_No scheduler data yet._", parse_mode="Markdown")
+            return
 
-    lines = ["\U0001f553 *Scheduler Status*", ""]
-    for s in statuses:
-        status_emoji = "\U0001f7e2" if s["current_status"] == "idle" else "\U0001f7e1"
-        if s["last_error"]:
-            status_emoji = "\U0001f534"
-        lines.append(f"{status_emoji} *{_esc(s['job_name'])}*")
-        lines.append(f"  Status: {_esc(s['current_status'])}")
-        lines.append(f"  Runs: {s['run_count']} (OK: {s['success_count']}, Fail: {s['failure_count']})")
-        if s["last_duration_ms"] is not None:
-            lines.append(f"  Last duration: {s['last_duration_ms']}ms")
-        if s["last_run_at"]:
-            lines.append(f"  Last run: {s['last_run_at'].strftime('%Y-%m-%d %H:%M UTC')}")
-        if s["last_error"]:
-            err = s["last_error"][:100]
-            lines.append(f"  Error: {_esc(err)}")
-        lines.append("")
+        lines = ["\U0001f553 *Scheduler Status*", ""]
+        for s in statuses:
+            status_emoji = "\U0001f7e2" if s["current_status"] == "idle" else "\U0001f7e1"
+            if s["last_error"]:
+                status_emoji = "\U0001f534"
+            lines.append(f"{status_emoji} *{_esc(s['job_name'])}*")
+            lines.append(f"  Status: {_esc(s['current_status'])}")
+            lines.append(f"  Runs: {s['run_count']} (OK: {s['success_count']}, Fail: {s['failure_count']})")
+            if s["last_duration_ms"] is not None:
+                lines.append(f"  Last duration: {s['last_duration_ms']}ms")
+            if s["last_run_at"]:
+                lines.append(f"  Last run: {s['last_run_at'].strftime('%Y-%m-%d %H:%M UTC')}")
+            if s["last_error"]:
+                err = s["last_error"][:100]
+                lines.append(f"  Error: {_esc(err)}")
+            lines.append("")
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_scheduler crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Scheduler error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
 async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    service = get_health_service()
-    system = service.check_all()
-    text = service.format_health_command(system)
-    await update.message.reply_text(text, parse_mode="Markdown")
+    try:
+        service = get_health_service()
+        system = service.check_all()
+        text = service.format_health_command(system)
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_health crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Health error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 ASSET_ALIASES = {
@@ -466,25 +529,32 @@ ASSET_ALIASES = {
 
 @owner_only
 async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if args:
-        query = args[0].upper()
-        symbol = ASSET_ALIASES.get(query, query if "/" in query else None)
-        if symbol:
-            targets = [a for a in settings.assets if a.symbol == symbol]
+    try:
+        args = context.args
+        if args:
+            query = args[0].upper()
+            symbol = ASSET_ALIASES.get(query, query if "/" in query else None)
+            if symbol:
+                targets = [a for a in settings.assets if a.symbol == symbol]
+            else:
+                await update.message.reply_text(
+                    f"Unknown asset: {query}\nUse: BTC, ETH, XRP, LINK, LTC",
+                )
+                return
         else:
-            await update.message.reply_text(
-                f"Unknown asset: {query}\nUse: BTC, ETH, XRP, LINK, LTC",
-            )
-            return
-    else:
-        targets = list(settings.assets)
+            targets = list(settings.assets)
 
-    pipeline = get_pipeline()
+        pipeline = get_pipeline()
 
-    for asset in targets:
-        text = await _debug_asset(pipeline, asset)
-        await update.message.reply_text(text, parse_mode="Markdown")
+        for asset in targets:
+            text = await _debug_asset(pipeline, asset)
+            await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_debug crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Debug error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 async def _debug_asset(pipeline, asset) -> str:
@@ -666,28 +736,42 @@ async def _debug_asset(pipeline, asset) -> str:
 
 @owner_only
 async def cmd_reset_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    portfolio = get_portfolio()
-    result = portfolio.reset_challenge_status()
-    await update.message.reply_text(f"\U0001f504 {result}", parse_mode="Markdown")
+    try:
+        portfolio = get_portfolio()
+        result = portfolio.reset_challenge_status()
+        await update.message.reply_text(f"\U0001f504 {result}", parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_reset_challenge crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Reset challenge error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
 async def cmd_new_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    portfolio = get_portfolio()
-    archive, msg = portfolio.start_new_challenge()
-
     try:
-        with get_session() as session:
-            session.add(AuditLog(
-                action="NEW_CHALLENGE",
-                actor="owner",
-                detail=archive,
-            ))
-    except Exception as e:
-        logger.error("Failed to persist challenge archive: %s", e)
+        portfolio = get_portfolio()
+        archive, msg = portfolio.start_new_challenge()
 
-    record_portfolio_snapshot("new_challenge")
-    await update.message.reply_text(msg, parse_mode="Markdown")
+        try:
+            with get_session() as session:
+                session.add(AuditLog(
+                    action="NEW_CHALLENGE",
+                    actor="owner",
+                    detail=archive,
+                ))
+        except Exception as e:
+            logger.error("Failed to persist challenge archive: %s", e)
+
+        record_portfolio_snapshot("new_challenge")
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_new_challenge crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"New challenge error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 

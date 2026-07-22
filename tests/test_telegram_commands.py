@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from src.telegram_bot.bot import (
     cmd_start, cmd_help, cmd_status, cmd_portfolio,
     cmd_signal, cmd_history, cmd_confirm, cmd_reject,
-    cmd_pause, cmd_resume, cmd_settings,
+    cmd_pause, cmd_resume, cmd_settings, cmd_auth,
+    cmd_scheduler, cmd_health, cmd_debug,
+    cmd_reset_challenge, cmd_new_challenge,
 )
 from src.config import settings, AgentMode
 
@@ -317,3 +319,161 @@ async def test_cmd_confirm_expires_once_not_per_signal(mock_update, mock_context
         await cmd_confirm(mock_update, mock_context)
 
     assert mock_lifecycle.expire_old_signals.call_count == 1
+
+
+# --- Bug #6: Error handling for all remaining commands ---
+
+
+@pytest.mark.asyncio
+async def test_cmd_confirm_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.get_portfolio", side_effect=RuntimeError("DB down")):
+        await cmd_confirm(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Confirm error" in text or "DB down" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_reject_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.get_session", side_effect=RuntimeError("DB down")):
+        await cmd_reject(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Reject error" in text or "DB down" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_signal_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.get_last_signals", side_effect=RuntimeError("crash")):
+        await cmd_signal(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Signal error" in text or "crash" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_history_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.get_portfolio", side_effect=RuntimeError("crash")):
+        await cmd_history(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "History error" in text or "crash" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_settings_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.settings", side_effect=RuntimeError("crash")):
+        mock_context.args = None
+        with patch("src.telegram_bot.bot.settings") as mock_settings:
+            mock_settings.agent_mode = MagicMock()
+            mock_settings.agent_mode.value = "test"
+            type(mock_settings).beginner_explanations = property(lambda s: (_ for _ in ()).throw(RuntimeError("crash")))
+            await cmd_settings(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Settings error" in text or "crash" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_auth_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.get_user_permissions", side_effect=RuntimeError("crash")):
+        await cmd_auth(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Auth error" in text or "crash" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_scheduler_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.get_scheduler_status", side_effect=RuntimeError("crash")):
+        await cmd_scheduler(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Scheduler error" in text or "crash" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_health_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.get_health_service", side_effect=RuntimeError("crash")):
+        await cmd_health(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Health error" in text or "crash" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_debug_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.get_pipeline", side_effect=RuntimeError("crash")):
+        await cmd_debug(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Debug error" in text or "crash" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_reset_challenge_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.get_portfolio", side_effect=RuntimeError("crash")):
+        await cmd_reset_challenge(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Reset challenge error" in text or "crash" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_new_challenge_error_handling(mock_update, mock_context):
+    with patch("src.telegram_bot.bot.get_portfolio", side_effect=RuntimeError("crash")):
+        await cmd_new_challenge(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "New challenge error" in text or "crash" in text
+
+
+# --- Bug #3: beginner_explanations persistence ---
+
+
+@pytest.mark.asyncio
+async def test_cmd_settings_persists_beginner_explanations(mock_update, mock_context):
+    original = settings.beginner_explanations
+    mock_context.args = ["beginner", "false"]
+
+    mock_repo = MagicMock()
+    with patch("src.telegram_bot.bot.get_session") as mock_gs:
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+        with patch("src.database.repository.AppSettingRepository", return_value=mock_repo):
+            await cmd_settings(mock_update, mock_context)
+
+    assert settings.beginner_explanations is False
+    settings.beginner_explanations = original
+
+
+@pytest.mark.asyncio
+async def test_startup_sweep_restores_beginner_explanations():
+    from src.scheduler.jobs import startup_sweep
+    from src.database.repository import AppSettingRepository
+
+    original = settings.beginner_explanations
+    settings.beginner_explanations = True
+
+    def mock_get(self, key, default=None):
+        if key == "agent_mode":
+            return None
+        if key == "beginner_explanations":
+            return "False"
+        return default
+
+    with patch("src.scheduler.jobs.get_session") as mock_gs, \
+         patch.object(AppSettingRepository, "get", mock_get):
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+
+        sched_repo_mock = MagicMock()
+        sched_repo_mock.get_all.return_value = []
+        with patch("src.scheduler.jobs.SchedulerStateRepository", return_value=sched_repo_mock), \
+             patch("src.scheduler.jobs.SignalLifecycle") as mock_lc:
+            mock_lc.return_value.expire_old_signals.return_value = []
+            await startup_sweep()
+
+    assert settings.beginner_explanations is False
+    settings.beginner_explanations = original
+
+
+# --- Bug #1: challenge_engine docstring ---
+
+
+def test_challenge_engine_docstring_says_2_positions():
+    import src.strategy.challenge_engine as ce
+    assert "up to 2" in ce.__doc__ or "2 open positions" in ce.__doc__
+    assert "up to 3" not in ce.__doc__

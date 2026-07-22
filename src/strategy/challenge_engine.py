@@ -8,10 +8,16 @@ Key differences from Conservative:
 - Wider balance range for entry (955–1115 vs 955–1110)
 - Larger position sizes (0.5% risk default vs 0.3%)
 - Take profit at 2× risk (vs 3×) — lock profits faster
-- Allows up to 3 open positions (vs 2)
+- Allows up to 2 open positions (same as Conservative)
 - Dynamic stop tightening near the win level
 
 Does NOT modify the Conservative strategy in any way.
+
+WARNING: This engine is NOT used in the live trading path. Production uses
+StrategyEngine (src/strategy/engine.py) via jobs.py. This engine is only
+used by the backtester. Before activating it in the live path, reconcile
+the threshold deviations noted above (e.g. balance cap $1115 vs $1110,
+position sizing 60% vs 50%) with the main engine's spec.
 """
 from __future__ import annotations
 
