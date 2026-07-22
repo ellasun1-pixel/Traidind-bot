@@ -202,3 +202,51 @@ async def test_cmd_portfolio_error_handling(mock_update, mock_context):
 
     text = mock_update.message.reply_text.call_args[0][0]
     assert "error" in text.lower() or "DB down" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_pause_persists_state(mock_update, mock_context):
+    """Fix #8: /pause must persist agent_mode to DB so it survives redeploy."""
+    from src.config import AgentMode
+    settings.agent_mode = AgentMode.PAPER_CHALLENGE
+
+    with patch("src.telegram_bot.bot.get_session") as mock_gs:
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+        await cmd_pause(mock_update, mock_context)
+
+    assert settings.agent_mode == AgentMode.PAUSED
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "paused" in text.lower()
+    settings.agent_mode = AgentMode.PAPER_CHALLENGE
+
+
+@pytest.mark.asyncio
+async def test_cmd_resume_restores_pre_pause_mode(mock_update, mock_context):
+    """Fix #12: /resume must restore the mode that was active before /pause."""
+    from src.config import AgentMode
+    settings.agent_mode = AgentMode.PAUSED
+
+    from src.database.repository import AppSettingRepository
+
+    original_get = AppSettingRepository.get
+    def mock_get(self, key, default=None):
+        if key == "pre_pause_mode":
+            return "ALERT_ONLY"
+        return default
+
+    with patch("src.telegram_bot.bot.get_session") as mock_gs, \
+         patch.object(AppSettingRepository, "get", mock_get), \
+         patch.object(AppSettingRepository, "set", MagicMock()):
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+        await cmd_resume(mock_update, mock_context)
+
+    assert settings.agent_mode == AgentMode.ALERT_ONLY
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "ALERT_ONLY" in text
+    settings.agent_mode = AgentMode.PAPER_CHALLENGE

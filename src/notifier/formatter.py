@@ -159,7 +159,8 @@ class SignalFormatter:
                       health_status: str = "Unavailable",
                       last_signals: dict = None,
                       pending_signals: list = None,
-                      scheduler_info: dict = None) -> str:
+                      scheduler_info: dict = None,
+                      overnight_events: list = None) -> str:
         if report_type == "morning":
             header = "☀️ *Morning Report*"
         else:
@@ -238,6 +239,15 @@ class SignalFormatter:
                 last_err = scheduler_info.get("last_error")
                 if last_err:
                     lines.append(f"Last error: {_esc(last_err)}")
+
+        if report_type == "morning" and overnight_events:
+            lines.append("")
+            lines.append("*Overnight Events (23:00–08:00):*")
+            for event in overnight_events:
+                lines.append(f"  • {_esc(event)}")
+        elif report_type == "morning":
+            lines.append("")
+            lines.append("Overnight Events: None")
 
         if report_type == "evening":
             lines.append("")

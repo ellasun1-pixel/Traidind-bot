@@ -312,7 +312,16 @@ async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from src.database.repository import AppSettingRepository
+    previous_mode = settings.agent_mode.value
     settings.agent_mode = AgentMode.PAUSED
+    try:
+        with get_session() as session:
+            repo = AppSettingRepository(session)
+            repo.set("agent_mode", AgentMode.PAUSED.value)
+            repo.set("pre_pause_mode", previous_mode)
+    except Exception as e:
+        logger.error("Failed to persist pause state: %s", e)
     await update.message.reply_text(
         "⏸️ Agent paused. Market observation continues but no signals will be sent.\n"
         "Use /resume to continue.",
@@ -322,9 +331,23 @@ async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    settings.agent_mode = AgentMode.PAPER_CHALLENGE
+    from src.database.repository import AppSettingRepository
+    restored_mode = AgentMode.PAPER_CHALLENGE
+    try:
+        with get_session() as session:
+            repo = AppSettingRepository(session)
+            saved = repo.get("pre_pause_mode")
+            if saved:
+                try:
+                    restored_mode = AgentMode(saved)
+                except ValueError:
+                    pass
+            repo.set("agent_mode", restored_mode.value)
+    except Exception as e:
+        logger.error("Failed to persist resume state: %s", e)
+    settings.agent_mode = restored_mode
     await update.message.reply_text(
-        "▶️ Agent resumed in PAPER_CHALLENGE mode.",
+        f"▶️ Agent resumed in {restored_mode.value} mode.",
         parse_mode="Markdown",
     )
 

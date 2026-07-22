@@ -95,6 +95,10 @@ class PaperPortfolio:
             return False, f"Challenge is {self.challenge_status} — no new trades"
 
         open_positions = [p for p in self.positions if p.status == "open"]
+
+        if any(p.symbol == symbol for p in open_positions):
+            return False, f"Already have an open position in {symbol}"
+
         total_open_risk = sum(
             abs(p.entry_price - p.stop_loss) * p.quantity
             for p in open_positions if p.stop_loss > 0
