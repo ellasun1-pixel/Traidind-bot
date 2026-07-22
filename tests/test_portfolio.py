@@ -194,13 +194,13 @@ class TestChallengeStatus:
         portfolio._update_challenge_status()
         assert portfolio.challenge_status == "won"
 
-    def test_reset_challenge_status(self):
-        """Manual reset recalculates from current equity."""
+    def test_reset_challenge_refuses_lost(self):
+        """Lost challenge cannot be resurrected — use /new_challenge instead."""
         portfolio = PaperPortfolio(starting_balance=1000.0)
         portfolio.challenge_status = "lost"
         msg = portfolio.reset_challenge_status()
-        assert portfolio.challenge_status == "active"
-        assert "lost" in msg and "active" in msg
+        assert portfolio.challenge_status == "lost"
+        assert "cannot resurrect" in msg.lower() or "new_challenge" in msg.lower()
 
     def test_reset_challenge_preserves_won(self):
         """Manual reset cannot revert terminal 'won' status."""
@@ -666,3 +666,27 @@ class TestConfirmBuyDuplicateSymbolCheck:
             position_value_usd=100.0, stop_loss=2850.0, risk_dollars=3.0,
         )
         assert ok2
+
+
+class TestResetChallengeCannotResurrect:
+    """Fix #13: /reset_challenge must not resurrect a lost challenge."""
+
+    def test_reset_refuses_to_resurrect_lost(self):
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.challenge_status = "lost"
+        result = portfolio.reset_challenge_status(prices={})
+        assert "cannot resurrect" in result.lower() or "lost" in result.lower()
+        assert portfolio.challenge_status == "lost"
+
+    def test_reset_refuses_won(self):
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.challenge_status = "won"
+        result = portfolio.reset_challenge_status(prices={})
+        assert "cannot" in result.lower()
+        assert portfolio.challenge_status == "won"
+
+    def test_reset_keeps_active_unchanged(self):
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.challenge_status = "active"
+        result = portfolio.reset_challenge_status(prices={})
+        assert portfolio.challenge_status in ("active", "won", "lost")

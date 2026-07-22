@@ -1,21 +1,9 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-
 from src.config import settings
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class PositionSizeResult:
-    position_value_usd: float
-    risk_dollars: float
-    stop_distance_pct: float
-    quantity: float
-    approved: bool
-    rejection_reason: str = ""
 
 
 class RiskManager:
@@ -23,32 +11,6 @@ class RiskManager:
         self.starting_balance = settings.starting_balance
         self.win_level = settings.win_level
         self.loss_level = settings.loss_level
-
-    def calculate_position_size(
-        self,
-        risk_pct: float,
-        entry_price: float,
-        stop_loss_price: float,
-    ) -> PositionSizeResult:
-        if entry_price <= 0 or stop_loss_price <= 0:
-            return PositionSizeResult(0, 0, 0, 0, False, "Invalid prices")
-
-        risk_dollars = self.starting_balance * risk_pct
-        stop_distance_pct = abs(entry_price - stop_loss_price) / entry_price
-
-        if stop_distance_pct == 0:
-            return PositionSizeResult(0, risk_dollars, 0, 0, False, "Zero stop distance")
-
-        position_value_usd = risk_dollars / stop_distance_pct
-        quantity = position_value_usd / entry_price
-
-        return PositionSizeResult(
-            position_value_usd=round(position_value_usd, 2),
-            risk_dollars=round(risk_dollars, 2),
-            stop_distance_pct=round(stop_distance_pct, 6),
-            quantity=round(quantity, 8),
-            approved=True,
-        )
 
     def check_risk_budget(
         self,

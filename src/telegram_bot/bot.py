@@ -35,16 +35,6 @@ def _esc(text: str) -> str:
 
 
 formatter = SignalFormatter()
-_pending_signals: dict[int, dict] = {}
-_next_signal_id = 1
-
-
-def _store_pending_signal(signal_data: dict) -> int:
-    global _next_signal_id
-    sid = _next_signal_id
-    _next_signal_id += 1
-    _pending_signals[sid] = signal_data
-    return sid
 
 
 @owner_only
@@ -85,7 +75,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         portfolio = get_portfolio()
-        last_signals = get_last_signals()
         prices = await get_live_prices()
         equity = portfolio.get_total_equity(prices)
 
@@ -102,11 +91,40 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "",
         ]
 
+        db_signals: dict[str, tuple[str, str]] = {}
+        try:
+            with get_session() as session:
+                from sqlalchemy import func as sqla_func
+                subq = (
+                    session.query(
+                        Signal.asset_id,
+                        sqla_func.max(Signal.created_at).label("latest"),
+                    )
+                    .group_by(Signal.asset_id)
+                    .subquery()
+                )
+                latest = (
+                    session.query(Signal)
+                    .join(Asset)
+                    .join(subq, (Signal.asset_id == subq.c.asset_id) & (Signal.created_at == subq.c.latest))
+                    .all()
+                )
+                for sig in latest:
+                    sym = sig.asset.symbol if sig.asset else "?"
+                    db_signals[sym] = (sig.regime or "UNKNOWN", sig.signal_type)
+        except Exception:
+            pass
+
+        last_signals = db_signals or get_last_signals()
         if last_signals:
             status_lines.append("*Latest regimes:*")
-            for symbol, sig in last_signals.items():
-                regime_val = sig.regime.value if sig.regime else "UNKNOWN"
-                status_lines.append(f"  {symbol}: {_esc(regime_val)} - {_esc(sig.signal_type)}")
+            for symbol, val in last_signals.items():
+                if isinstance(val, tuple):
+                    regime_val, sig_type = val
+                else:
+                    regime_val = val.regime.value if val.regime else "UNKNOWN"
+                    sig_type = val.signal_type
+                status_lines.append(f"  {symbol}: {_esc(regime_val)} - {_esc(sig_type)}")
         else:
             status_lines.append("No signals generated yet.")
 
@@ -172,6 +190,8 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     with get_session() as session:
         lifecycle = SignalLifecycle(session)
+        lifecycle.expire_old_signals()
+
         pending_db = (
             session.query(Signal)
             .join(Asset)
@@ -188,7 +208,6 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if exp.tzinfo is None:
                 exp = exp.replace(tzinfo=tz.utc)
             if exp <= now:
-                lifecycle.expire_old_signals()
                 expired.append(sig)
             else:
                 actionable.append(sig)

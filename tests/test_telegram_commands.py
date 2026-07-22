@@ -250,3 +250,70 @@ async def test_cmd_resume_restores_pre_pause_mode(mock_update, mock_context):
     text = mock_update.message.reply_text.call_args[0][0]
     assert "ALERT_ONLY" in text
     settings.agent_mode = AgentMode.PAPER_CHALLENGE
+
+
+def test_dead_code_pending_signals_removed():
+    """Fix #15: _pending_signals and _store_pending_signal must be removed."""
+    import src.telegram_bot.bot as bot_mod
+    assert not hasattr(bot_mod, "_pending_signals"), "_pending_signals is dead code"
+    assert not hasattr(bot_mod, "_store_pending_signal"), "_store_pending_signal is dead code"
+
+
+@pytest.mark.asyncio
+async def test_cmd_status_reads_signals_from_db(mock_update, mock_context):
+    """Fix #14: /status must read last signals from DB, not just in-memory dict."""
+    mock_portfolio = MagicMock()
+    mock_portfolio.get_total_equity.return_value = 1010.0
+    mock_portfolio.balance_usd = 1010.0
+    mock_portfolio.challenge_status = "active"
+    mock_portfolio.positions = []
+
+    mock_signal = MagicMock()
+    mock_signal.asset_id = 1
+    mock_signal.asset.symbol = "BTC/USD"
+    mock_signal.regime = "TREND"
+    mock_signal.signal_type = "BUY"
+    mock_signal.created_at = MagicMock()
+
+    with patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
+         patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock, return_value={}), \
+         patch("src.telegram_bot.bot.get_session") as mock_gs, \
+         patch("src.telegram_bot.bot.get_last_signals", return_value={}):
+
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+        mock_subq = MagicMock()
+        mock_session.query.return_value.group_by.return_value.subquery.return_value = mock_subq
+        mock_session.query.return_value.join.return_value.join.return_value.all.return_value = [mock_signal]
+
+        await cmd_status(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Status" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_confirm_expires_once_not_per_signal(mock_update, mock_context):
+    """Fix #17: expire_old_signals must be called once before the loop, not per signal."""
+    mock_portfolio = MagicMock()
+    mock_portfolio.is_challenge_active = True
+
+    mock_lifecycle = MagicMock()
+    mock_lifecycle.expire_old_signals.return_value = []
+
+    with patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
+         patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock, return_value={}), \
+         patch("src.telegram_bot.bot.get_session") as mock_gs, \
+         patch("src.telegram_bot.bot.record_portfolio_snapshot"), \
+         patch("src.telegram_bot.bot.SignalLifecycle", return_value=mock_lifecycle):
+
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+        mock_session.query.return_value.join.return_value.filter.return_value.all.return_value = []
+
+        await cmd_confirm(mock_update, mock_context)
+
+    assert mock_lifecycle.expire_old_signals.call_count == 1
