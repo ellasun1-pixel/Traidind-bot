@@ -279,6 +279,8 @@ class PaperPortfolio:
             "open_positions_abandoned": [p.to_dict() for p in self.positions if p.status == "open"],
         }
 
+        self._close_all_db_positions()
+
         self.balance_usd = self.starting_balance
         self.peak_balance = self.starting_balance
         self.realized_pnl_total = 0.0
@@ -298,6 +300,26 @@ class PaperPortfolio:
             f"Balance reset to ${self.starting_balance:.2f}. Good luck!"
         )
         return archive, msg
+
+    def _close_all_db_positions(self) -> None:
+        try:
+            with get_session() as session:
+                repo = PositionRepository(session)
+                open_positions = repo.get_open()
+                if not open_positions:
+                    return
+                for db_pos in open_positions:
+                    repo.close(
+                        db_pos,
+                        exit_price=float(db_pos.entry_price),
+                        realized_pnl=0.0,
+                        close_reason="challenge_reset",
+                    )
+                logger.warning(
+                    "Closed %d DB position(s) for challenge reset", len(open_positions),
+                )
+        except Exception as e:
+            logger.error("Failed to close DB positions on challenge reset: %s", e)
 
     def reset_challenge_status(self, prices: dict[str, float] | None = None) -> str:
         old = self.challenge_status
@@ -426,6 +448,7 @@ class PaperPortfolio:
                     .filter(PaperPosition.is_open.is_(False))
                     .filter(PaperPosition.close_reason != "duplicate_cleanup")
                     .filter(PaperPosition.close_reason != "excess_cleanup")
+                    .filter(PaperPosition.close_reason != "challenge_reset")
                     .order_by(PaperPosition.closed_at.asc())
                     .all()
                 )
