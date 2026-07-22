@@ -23,6 +23,7 @@ from src.health.service import get_health_service
 from src.strategy.indicators import compute_indicators, indicator_warmup_status, WARMUP
 from src.strategy.regime import classify_regime, MarketRegime, regime_nan_fields
 from src.strategy.engine import StrategyEngine
+from src.signals.lifecycle import InvalidTransitionError
 
 logger = logging.getLogger(__name__)
 
@@ -120,11 +121,18 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    portfolio = get_portfolio()
-    prices = await get_live_prices()
-    summary = portfolio.get_portfolio_summary(prices)
-    text = formatter.format_portfolio_summary(summary)
-    await update.message.reply_text(text, parse_mode="Markdown")
+    try:
+        portfolio = get_portfolio()
+        prices = await get_live_prices()
+        summary = portfolio.get_portfolio_summary(prices)
+        text = formatter.format_portfolio_summary(summary)
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_portfolio crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Portfolio error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 @owner_only
@@ -228,7 +236,11 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 continue
 
             if ok:
-                lifecycle.confirm(sig)
+                try:
+                    lifecycle.confirm(sig)
+                except InvalidTransitionError as e:
+                    logger.warning("Signal %s expired mid-confirm: %s", sig.id, e)
+                    results[-1] = f"⚠️ {symbol}: Signal expired before confirmation could complete"
 
             if not portfolio.is_challenge_active:
                 challenge_ended = True
@@ -465,6 +477,7 @@ async def _debug_asset(pipeline, asset) -> str:
     lines.append(f"Last:  {last_ts}")
 
     if "open_time" in enriched.columns:
+        import pandas as pd
         times = pd.to_datetime(enriched["open_time"], errors="coerce").dropna()
         if len(times) > 1:
             diffs = times.diff().dropna()

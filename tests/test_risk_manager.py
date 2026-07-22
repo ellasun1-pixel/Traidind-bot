@@ -155,6 +155,15 @@ class TestCircuitBreakers:
 
     def test_normal_balance(self, rm):
         value, note = rm.apply_circuit_breakers(1060, 100, "BUY")
+        assert value == 100  # $100 is under 50% of $1060, so passes through
+
+    def test_circuit_breaker_1050_to_1089_caps_at_50_pct(self, rm):
+        value, note = rm.apply_circuit_breakers(1070, 600, "BUY")
+        assert value == 1070 * 0.50
+        assert "50%" in note
+
+    def test_circuit_breaker_1050_to_1089_no_cap_if_under(self, rm):
+        value, note = rm.apply_circuit_breakers(1070, 100, "BUY")
         assert value == 100
 
 

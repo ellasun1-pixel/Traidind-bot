@@ -138,3 +138,67 @@ async def test_cmd_settings_toggle(mock_update, mock_context):
     text = mock_update.message.reply_text.call_args[0][0]
     assert "False" in text
     settings.beginner_explanations = original
+
+
+@pytest.mark.asyncio
+async def test_cmd_debug_imports_pandas(mock_update, mock_context):
+    """Fix #3: /debug must not crash with NameError on pd.to_datetime."""
+    import importlib
+    import src.telegram_bot.bot as bot_module
+    source = importlib.util.find_spec("src.telegram_bot.bot")
+    with open(source.origin) as f:
+        code = f.read()
+    assert "import pandas" in code, "/debug uses pd.to_datetime but pandas is never imported"
+
+
+@pytest.mark.asyncio
+async def test_cmd_confirm_handles_expired_signal_gracefully(mock_update, mock_context):
+    """Fix #4: /confirm must catch InvalidTransitionError from lifecycle.confirm()."""
+    from src.signals.lifecycle import InvalidTransitionError
+
+    mock_portfolio = MagicMock()
+    mock_portfolio.confirm_buy.return_value = (True, "Bought BTC")
+    mock_portfolio.is_challenge_active = True
+
+    mock_sig = MagicMock()
+    mock_sig.id = "test-sig-1"
+    mock_sig.signal_type = "BUY"
+    mock_sig.asset.symbol = "BTC/USD"
+    mock_sig.entry_price = 50000.0
+    mock_sig.stop_loss = 48500.0
+    mock_sig.position_size_usd = 100.0
+    mock_sig.max_loss_usd = 3.0
+    mock_sig.expires_at = MagicMock()
+    mock_sig.expires_at.tzinfo = MagicMock()
+
+    from datetime import datetime, timezone
+    mock_sig.expires_at.__le__ = MagicMock(return_value=False)
+
+    mock_lifecycle = MagicMock()
+    mock_lifecycle.confirm.side_effect = InvalidTransitionError("test-sig-1", "expired", "confirmed")
+
+    with patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
+         patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock, return_value={}), \
+         patch("src.telegram_bot.bot.get_session") as mock_gs, \
+         patch("src.telegram_bot.bot.record_portfolio_snapshot"), \
+         patch("src.telegram_bot.bot.SignalLifecycle", return_value=mock_lifecycle):
+
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+        mock_session.query.return_value.join.return_value.filter.return_value.all.return_value = [mock_sig]
+
+        await cmd_confirm(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args_list[-1][0][0]
+    assert "expired" in text.lower() or "⚠️" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_portfolio_error_handling(mock_update, mock_context):
+    """Fix #7: /portfolio must not hang on exception — uses same pattern as /status."""
+    with patch("src.telegram_bot.bot.get_portfolio", side_effect=RuntimeError("DB down")):
+        await cmd_portfolio(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "error" in text.lower() or "DB down" in text

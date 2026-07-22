@@ -100,3 +100,13 @@ class TestMonteCarloAndComparison:
         assert "challenge" in result
         assert result["conservative"]["strategy_name"] == "Conservative"
         assert result["challenge"]["strategy_name"] == "Challenge"
+
+
+class TestChallengeEngineConfig:
+    def test_max_open_positions_is_2(self):
+        """Fix #6: challenge_engine must use max_open_positions=2, matching the spec."""
+        from src.strategy.challenge_engine import ChallengeConfig
+        cfg = ChallengeConfig()
+        assert cfg.max_open_positions == 2, (
+            f"ChallengeConfig.max_open_positions={cfg.max_open_positions}, spec requires 2"
+        )
