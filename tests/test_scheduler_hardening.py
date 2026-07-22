@@ -1289,18 +1289,25 @@ class TestStartupSweepRestoresMode:
                 real_settings.agent_mode = original
 
 
-class TestDuplicateRenotification:
-    """Duplicate signals should re-notify after DUPLICATE_RENOTIFY_HOURS."""
+class TestDuplicateSuppressionWithExpiry:
+    """Duplicate suppression only blocks within the signal's expiry window.
+    Re-notification happens naturally: once the signal expires (default 30 min),
+    get_pending_for_asset returns empty, and the engine creates a fresh signal."""
 
-    def test_recent_duplicate_is_suppressed(self):
-        from src.scheduler.jobs import _is_signal_equivalent, DUPLICATE_RENOTIFY_HOURS
-        from datetime import datetime, timezone, timedelta
+    def test_no_renotify_constant_exported(self):
+        import src.scheduler.jobs as jobs_mod
+        assert not hasattr(jobs_mod, "DUPLICATE_RENOTIFY_HOURS"), (
+            "DUPLICATE_RENOTIFY_HOURS was removed — re-notification is handled "
+            "by the 30-min signal expiry cycle, not a separate timer"
+        )
+
+    def test_pending_signal_within_expiry_is_suppressed(self):
+        from src.scheduler.jobs import _is_signal_equivalent
         existing = MagicMock()
         existing.signal_type = "BUY"
         existing.entry_price = 50000.0
         existing.stop_loss = 48500.0
         existing.priority = "medium"
-        existing.created_at = datetime.now(timezone.utc) - timedelta(hours=1)
 
         new_signal = MagicMock()
         new_signal.signal_type = "BUY"
@@ -1309,16 +1316,43 @@ class TestDuplicateRenotification:
         new_signal.priority = "MEDIUM"
 
         assert _is_signal_equivalent(existing, new_signal) is True
-        age = datetime.now(timezone.utc) - existing.created_at
-        assert age < timedelta(hours=DUPLICATE_RENOTIFY_HOURS)
 
-    def test_old_duplicate_should_renotify(self):
-        from src.scheduler.jobs import DUPLICATE_RENOTIFY_HOURS
+    def test_expired_signal_invisible_to_pending_query(self, session, seed_asset):
+        """Once a signal expires, get_pending_for_asset excludes it,
+        so the next equivalent signal is treated as fresh (not suppressed)."""
+        from src.signals.lifecycle import SignalLifecycle
         from datetime import datetime, timezone, timedelta
-        existing_created = datetime.now(timezone.utc) - timedelta(hours=DUPLICATE_RENOTIFY_HOURS + 1)
-        age = datetime.now(timezone.utc) - existing_created
-        assert age >= timedelta(hours=DUPLICATE_RENOTIFY_HOURS)
 
-    def test_renotify_constant_is_sensible(self):
-        from src.scheduler.jobs import DUPLICATE_RENOTIFY_HOURS
-        assert 2 <= DUPLICATE_RENOTIFY_HOURS <= 24
+        lifecycle = SignalLifecycle(session)
+        expired_time = datetime.now(timezone.utc) - timedelta(minutes=1)
+        lifecycle.create_signal(
+            asset_id=seed_asset.id,
+            signal_type="BUY",
+            regime="TREND",
+            expires_at=expired_time,
+            reason="test",
+            explanation="test",
+            strategy_version="1.0",
+            entry_price=50000.0,
+            stop_loss=48500.0,
+            priority="medium",
+        )
+        session.flush()
+
+        pending = lifecycle.get_pending_for_asset(seed_asset.id)
+        assert len(pending) == 0, "Expired signal must not appear in pending query"
+
+    def test_all_replace_tzinfo_calls_are_guarded(self):
+        """Every .replace(tzinfo=...) in src/ must be preceded by a tzinfo is None check."""
+        import re
+        from pathlib import Path
+        src_dir = Path(__file__).resolve().parent.parent / "src"
+        unguarded = []
+        for py_file in src_dir.rglob("*.py"):
+            lines = py_file.read_text().splitlines()
+            for i, line in enumerate(lines):
+                if ".replace(tzinfo=" in line:
+                    prev_line = lines[i - 1] if i > 0 else ""
+                    if "tzinfo is None" not in prev_line and "tzinfo is None" not in line:
+                        unguarded.append(f"{py_file.relative_to(src_dir.parent)}:{i+1}")
+        assert unguarded == [], f"Unguarded .replace(tzinfo=) calls: {unguarded}"
