@@ -331,6 +331,12 @@ async def market_check_job():
         logger.info("Agent is PAUSED, skipping market check")
         return
 
+    tz_local = pytz.timezone(settings.timezone)
+    current_hour = datetime.now(tz_local).hour
+    if current_hour < 8 or current_hour >= 23:
+        logger.info("Outside active hours (%02d:00 %s), skipping market check", current_hour, settings.timezone)
+        return
+
     portfolio = get_portfolio()
     if not portfolio.is_challenge_active:
         logger.info("Challenge is %s — skipping signal generation", portfolio.challenge_status)
@@ -482,6 +488,38 @@ async def _build_report(report_type: str) -> str:
     except Exception:
         pass
 
+    overnight_events = []
+    if report_type == "morning":
+        try:
+            tz_local = pytz.timezone(settings.timezone)
+            now_local = datetime.now(tz_local)
+            night_start = now_local.replace(hour=23, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            night_end = now_local.replace(hour=8, minute=0, second=0, microsecond=0)
+
+            with get_session() as session:
+                from src.database.models import AlertHistory
+                alerts = (
+                    session.query(AlertHistory)
+                    .filter(AlertHistory.sent_at >= night_start)
+                    .filter(AlertHistory.sent_at < night_end)
+                    .all()
+                )
+                for a in alerts:
+                    overnight_events.append(f"Alert: {a.alert_type} — {a.asset_symbol or 'system'}")
+
+                overnight_signals = (
+                    session.query(Signal)
+                    .join(Asset)
+                    .filter(Signal.created_at >= night_start)
+                    .filter(Signal.created_at < night_end)
+                    .all()
+                )
+                for s in overnight_signals:
+                    sym = s.asset.symbol if s.asset else "?"
+                    overnight_events.append(f"Signal: {s.signal_type} {sym} ({s.status})")
+        except Exception as e:
+            logger.warning("Failed to query overnight events: %s", e)
+
     return formatter.format_report(
         report_type=report_type,
         summary=summary,
@@ -489,6 +527,7 @@ async def _build_report(report_type: str) -> str:
         last_signals=_last_signals or None,
         pending_signals=pending_signals or None,
         scheduler_info=scheduler_info or None,
+        overnight_events=overnight_events or None,
     )
 
 
@@ -662,6 +701,16 @@ async def startup_sweep():
                     state.lock_expires_at = None
             session.flush()
             logger.info("Cleared stale locks from previous run")
+
+        with get_session() as session:
+            setting_repo = AppSettingRepository(session)
+            saved_mode = setting_repo.get("agent_mode")
+            if saved_mode:
+                try:
+                    settings.agent_mode = AgentMode(saved_mode)
+                    logger.info("Restored agent_mode=%s from DB", saved_mode)
+                except ValueError:
+                    logger.warning("Unknown saved agent_mode '%s', keeping default", saved_mode)
 
     except Exception as e:
         logger.error("Startup sweep failed: %s", e, exc_info=True)

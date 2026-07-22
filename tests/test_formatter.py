@@ -89,3 +89,46 @@ class TestSignalFormat:
         )
         text = fmt.format_signal(signal)
         assert "/confirm" not in text
+
+
+class TestMorningReportOvernightEvents:
+    """Fix #10: morning report must include overnight events section."""
+
+    def test_morning_report_with_overnight_events(self):
+        fmt = SignalFormatter()
+        summary = {
+            "balance_usd": 1000.0, "total_equity": 1010.0,
+            "realized_pnl": 5.0, "unrealized_pnl": 5.0,
+            "distance_to_win": 110.0, "distance_to_loss": 60.0,
+            "open_positions": [],
+        }
+        events = ["Alert: STOP_APPROACH — BTC/USD", "Signal: BUY ETH/USD (expired)"]
+        text = fmt.format_report(
+            "morning", summary, overnight_events=events,
+        )
+        assert "Overnight Events" in text
+        assert "STOP" in text and "APPROACH" in text
+        assert "ETH" in text
+
+    def test_morning_report_without_overnight_events(self):
+        fmt = SignalFormatter()
+        summary = {
+            "balance_usd": 1000.0, "total_equity": 1010.0,
+            "realized_pnl": 5.0, "unrealized_pnl": 5.0,
+            "distance_to_win": 110.0, "distance_to_loss": 60.0,
+            "open_positions": [],
+        }
+        text = fmt.format_report("morning", summary)
+        assert "Overnight Events: None" in text
+
+    def test_evening_report_no_overnight_section(self):
+        fmt = SignalFormatter()
+        summary = {
+            "balance_usd": 1000.0, "total_equity": 1010.0,
+            "realized_pnl": 5.0, "unrealized_pnl": 5.0,
+            "distance_to_win": 110.0, "distance_to_loss": 60.0,
+            "open_positions": [],
+        }
+        text = fmt.format_report("evening", summary)
+        assert "Overnight Events" not in text
+        assert "night mode" in text

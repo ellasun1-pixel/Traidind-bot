@@ -635,3 +635,34 @@ class TestUniqueOpenPositionConstraint:
         assert "UNIQUE INDEX" in content
         assert "paper_positions" in content
         assert "asset_id" in content
+
+
+class TestConfirmBuyDuplicateSymbolCheck:
+    """Fix #11: confirm_buy must reject duplicate symbols in-memory."""
+
+    def test_confirm_buy_rejects_duplicate_symbol(self, portfolio):
+        ok1, msg1 = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=50000.0,
+            position_value_usd=100.0, stop_loss=48500.0, risk_dollars=3.0,
+        )
+        assert ok1
+
+        ok2, msg2 = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=51000.0,
+            position_value_usd=100.0, stop_loss=49000.0, risk_dollars=3.0,
+        )
+        assert not ok2
+        assert "already have" in msg2.lower() or "open position" in msg2.lower()
+
+    def test_confirm_buy_allows_different_symbols(self, portfolio):
+        ok1, _ = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=50000.0,
+            position_value_usd=100.0, stop_loss=48500.0, risk_dollars=3.0,
+        )
+        assert ok1
+
+        ok2, _ = portfolio.confirm_buy(
+            symbol="ETH/USD", entry_price=3000.0,
+            position_value_usd=100.0, stop_loss=2850.0, risk_dollars=3.0,
+        )
+        assert ok2

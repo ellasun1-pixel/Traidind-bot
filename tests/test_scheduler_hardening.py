@@ -1207,3 +1207,83 @@ class TestHealthEndpoint:
         handler.end_headers = MagicMock()
         HealthHandler.do_GET(handler)
         handler.send_response.assert_called_with(503)
+
+
+class TestMarketCheckActiveHours:
+    """Fix #9: market_check_job must only run during 08:00–23:00 local time."""
+
+    @pytest.mark.asyncio
+    async def test_market_check_skipped_at_night(self):
+        from src.scheduler.jobs import market_check_job
+        from src.config import AgentMode
+
+        with patch("src.scheduler.jobs.settings") as mock_settings:
+            mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
+            mock_settings.timezone = "Asia/Jerusalem"
+
+            class FakeAware:
+                hour = 3
+            with patch("src.scheduler.jobs.datetime") as mock_dt:
+                mock_dt.now.return_value = FakeAware()
+
+                with patch("src.scheduler.jobs.pytz") as mock_pytz:
+                    mock_tz = MagicMock()
+                    mock_pytz.timezone.return_value = mock_tz
+
+                    with patch("src.scheduler.jobs.get_portfolio") as mock_gp:
+                        await market_check_job()
+                        mock_gp.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_market_check_runs_during_active_hours(self):
+        from src.scheduler.jobs import market_check_job
+        from src.config import AgentMode
+
+        with patch("src.scheduler.jobs.settings") as mock_settings:
+            mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
+            mock_settings.timezone = "Asia/Jerusalem"
+
+            class FakeAware:
+                hour = 10
+            with patch("src.scheduler.jobs.datetime") as mock_dt:
+                mock_dt.now.return_value = FakeAware()
+
+                with patch("src.scheduler.jobs.pytz") as mock_pytz:
+                    mock_tz = MagicMock()
+                    mock_pytz.timezone.return_value = mock_tz
+
+                    with patch("src.scheduler.jobs.get_portfolio") as mock_gp:
+                        mock_portfolio = MagicMock()
+                        mock_portfolio.is_challenge_active = False
+                        mock_gp.return_value = mock_portfolio
+                        await market_check_job()
+                        mock_gp.assert_called_once()
+
+
+class TestStartupSweepRestoresMode:
+    """Fix #8: startup_sweep must restore agent_mode from DB."""
+
+    @pytest.mark.asyncio
+    async def test_startup_restores_paused_mode(self):
+        from src.scheduler.jobs import startup_sweep
+
+        mock_setting_repo = MagicMock()
+        mock_setting_repo.get.return_value = "PAUSED"
+
+        with patch("src.scheduler.jobs.get_session") as mock_gs, \
+             patch("src.scheduler.jobs.SignalLifecycle"), \
+             patch("src.scheduler.jobs.AppSettingRepository", return_value=mock_setting_repo), \
+             patch("src.scheduler.jobs.SchedulerStateRepository") as mock_sched:
+
+            mock_session = MagicMock()
+            mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+            mock_sched.return_value.get_all.return_value = []
+
+            from src.config import settings as real_settings, AgentMode
+            original = real_settings.agent_mode
+            try:
+                await startup_sweep()
+                assert real_settings.agent_mode == AgentMode.PAUSED
+            finally:
+                real_settings.agent_mode = original
