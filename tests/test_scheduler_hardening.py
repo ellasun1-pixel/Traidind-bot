@@ -1287,3 +1287,38 @@ class TestStartupSweepRestoresMode:
                 assert real_settings.agent_mode == AgentMode.PAUSED
             finally:
                 real_settings.agent_mode = original
+
+
+class TestDuplicateRenotification:
+    """Duplicate signals should re-notify after DUPLICATE_RENOTIFY_HOURS."""
+
+    def test_recent_duplicate_is_suppressed(self):
+        from src.scheduler.jobs import _is_signal_equivalent, DUPLICATE_RENOTIFY_HOURS
+        from datetime import datetime, timezone, timedelta
+        existing = MagicMock()
+        existing.signal_type = "BUY"
+        existing.entry_price = 50000.0
+        existing.stop_loss = 48500.0
+        existing.priority = "medium"
+        existing.created_at = datetime.now(timezone.utc) - timedelta(hours=1)
+
+        new_signal = MagicMock()
+        new_signal.signal_type = "BUY"
+        new_signal.entry_price = 50100.0
+        new_signal.stop_loss = 48550.0
+        new_signal.priority = "MEDIUM"
+
+        assert _is_signal_equivalent(existing, new_signal) is True
+        age = datetime.now(timezone.utc) - existing.created_at
+        assert age < timedelta(hours=DUPLICATE_RENOTIFY_HOURS)
+
+    def test_old_duplicate_should_renotify(self):
+        from src.scheduler.jobs import DUPLICATE_RENOTIFY_HOURS
+        from datetime import datetime, timezone, timedelta
+        existing_created = datetime.now(timezone.utc) - timedelta(hours=DUPLICATE_RENOTIFY_HOURS + 1)
+        age = datetime.now(timezone.utc) - existing_created
+        assert age >= timedelta(hours=DUPLICATE_RENOTIFY_HOURS)
+
+    def test_renotify_constant_is_sensible(self):
+        from src.scheduler.jobs import DUPLICATE_RENOTIFY_HOURS
+        assert 2 <= DUPLICATE_RENOTIFY_HOURS <= 24

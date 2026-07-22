@@ -572,6 +572,9 @@ class PaperPortfolio:
 
     def _update_challenge_status(self, prices: dict[str, float] | None = None) -> str | None:
         """Returns a transition string ('won'/'lost') if challenge just ended, else None."""
+        if self.challenge_status in ("won", "lost"):
+            return None
+
         equity = self.get_total_equity(prices or {})
         old_status = self.challenge_status
 
@@ -579,8 +582,6 @@ class PaperPortfolio:
             self.challenge_status = "won"
         elif equity <= settings.loss_level:
             self.challenge_status = "lost"
-        elif self.challenge_status == "lost":
-            self.challenge_status = "active"
 
         if self.challenge_status != old_status:
             logger.warning(

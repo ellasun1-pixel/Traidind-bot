@@ -29,6 +29,8 @@ from src.health.service import get_health_service
 
 logger = logging.getLogger(__name__)
 
+DUPLICATE_RENOTIFY_HOURS = 4
+
 _portfolio: PaperPortfolio | None = None
 _send_message_func = None
 _pipeline: MarketDataPipeline | None = None
@@ -256,16 +258,24 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
         if pending:
             existing = pending[0]
             if _is_signal_equivalent(existing, signal):
-                logger.warning(
-                    "DUPLICATE_SUPPRESSED asset=%s new_type=%s new_price=%.2f "
-                    "existing_id=%s existing_type=%s existing_price=%s existing_created=%s "
-                    "existing_expires=%s",
-                    asset.symbol, signal.signal_type, signal.entry_price or 0,
-                    existing.id, existing.signal_type,
-                    existing.entry_price, existing.created_at, existing.expires_at,
+                age = datetime.now(timezone.utc) - existing.created_at.replace(tzinfo=timezone.utc)
+                if age < timedelta(hours=DUPLICATE_RENOTIFY_HOURS):
+                    logger.warning(
+                        "DUPLICATE_SUPPRESSED asset=%s new_type=%s new_price=%.2f "
+                        "existing_id=%s existing_type=%s existing_price=%s existing_created=%s "
+                        "existing_expires=%s age_hours=%.1f",
+                        asset.symbol, signal.signal_type, signal.entry_price or 0,
+                        existing.id, existing.signal_type,
+                        existing.entry_price, existing.created_at, existing.expires_at,
+                        age.total_seconds() / 3600,
+                    )
+                    result["status"] = "duplicate_suppressed"
+                    return result
+                logger.info(
+                    "DUPLICATE_RENOTIFY asset=%s age_hours=%.1f threshold=%dh — "
+                    "re-persisting and re-notifying",
+                    asset.symbol, age.total_seconds() / 3600, DUPLICATE_RENOTIFY_HOURS,
                 )
-                result["status"] = "duplicate_suppressed"
-                return result
             previous_signal_id = existing.id
             logger.info(
                 "Materially changed signal for %s: %s -> %s, superseding %s",
