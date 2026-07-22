@@ -458,3 +458,180 @@ class TestRestoreDeduplication:
             assert len(open_pos) <= settings.max_open_positions, (
                 f"Open positions {len(open_pos)} exceeds max {settings.max_open_positions}"
             )
+
+
+class TestChallengeResetDBCleanup:
+    """Critical fix #1: /new_challenge must close DB positions before resetting."""
+
+    def test_start_new_challenge_closes_db_positions(self):
+        from unittest.mock import patch, MagicMock, call
+
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.confirm_buy(
+            symbol="BTC/USD",
+            entry_price=50000.0,
+            position_value_usd=100.0,
+            stop_loss=48500.0,
+            risk_dollars=3.0,
+        )
+        assert len(portfolio.positions) == 1
+
+        mock_pos_1 = MagicMock()
+        mock_pos_1.entry_price = 50000.0
+        mock_pos_2 = MagicMock()
+        mock_pos_2.entry_price = 3000.0
+
+        with patch("src.portfolio.manager.get_session") as mock_get_session:
+            mock_session = MagicMock()
+            mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+
+            mock_repo = MagicMock()
+            mock_repo.get_open.return_value = [mock_pos_1, mock_pos_2]
+
+            with patch("src.portfolio.manager.PositionRepository", return_value=mock_repo):
+                archive, msg = portfolio.start_new_challenge()
+
+            assert mock_repo.close.call_count == 2
+            for c in mock_repo.close.call_args_list:
+                assert c.kwargs["close_reason"] == "challenge_reset"
+                assert c.kwargs["realized_pnl"] == 0.0
+
+        assert portfolio.balance_usd == 1000.0
+        assert len(portfolio.positions) == 0
+        assert portfolio.challenge_status == "active"
+
+    def test_challenge_reset_positions_excluded_from_balance_replay(self):
+        """After reset, restore_from_db must not replay challenge_reset closes."""
+        from unittest.mock import patch, MagicMock
+
+        with patch("src.portfolio.manager.get_session") as mock_get_session:
+            mock_session = MagicMock()
+            mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+
+            mock_query = mock_session.query.return_value
+            mock_join = mock_query.join.return_value
+            mock_filter = mock_join.filter.return_value
+
+            call_count = [0]
+            def side_effect_order_by(*args, **kwargs):
+                call_count[0] += 1
+                result = MagicMock()
+                result.all.return_value = []
+                result.first.return_value = None
+                return result
+            mock_filter.order_by = side_effect_order_by
+            mock_filter.filter.return_value.order_by = side_effect_order_by
+            mock_filter.filter.return_value.filter.return_value.order_by = side_effect_order_by
+            mock_filter.filter.return_value.filter.return_value.filter.return_value.order_by = side_effect_order_by
+
+            portfolio = PaperPortfolio.restore_from_db()
+
+            assert portfolio.balance_usd == settings.starting_balance
+            assert len(portfolio.positions) == 0
+
+    def test_full_cycle_buy_reset_restore_no_duplicates(self):
+        """Reproduces the exact prior failure: multiple confirms + reset + restore."""
+        from unittest.mock import patch, MagicMock
+        from datetime import datetime, timezone
+
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+
+        portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=50000.0,
+            position_value_usd=100.0, stop_loss=48500.0, risk_dollars=3.0,
+        )
+        portfolio.confirm_buy(
+            symbol="ETH/USD", entry_price=3000.0,
+            position_value_usd=100.0, stop_loss=2850.0, risk_dollars=5.0,
+        )
+        assert len(portfolio.positions) == 2
+
+        closed_positions = []
+
+        with patch("src.portfolio.manager.get_session") as mock_get_session:
+            mock_session = MagicMock()
+            mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+
+            mock_repo = MagicMock()
+            mock_db_pos_1 = MagicMock()
+            mock_db_pos_1.entry_price = 50000.0
+            mock_db_pos_2 = MagicMock()
+            mock_db_pos_2.entry_price = 3000.0
+            mock_repo.get_open.return_value = [mock_db_pos_1, mock_db_pos_2]
+
+            def track_close(pos, exit_price, realized_pnl, close_reason):
+                closed_positions.append(close_reason)
+            mock_repo.close.side_effect = track_close
+
+            with patch("src.portfolio.manager.PositionRepository", return_value=mock_repo):
+                archive, msg = portfolio.start_new_challenge()
+
+        assert all(r == "challenge_reset" for r in closed_positions)
+        assert len(closed_positions) == 2
+
+        assert portfolio.balance_usd == 1000.0
+        assert len(portfolio.positions) == 0
+        assert portfolio.challenge_status == "active"
+
+
+class TestUniqueOpenPositionConstraint:
+    """Critical fix #2: partial unique index via Alembic migration (PostgreSQL)
+    and application-level guard in _persist_buy (all backends)."""
+
+    def test_migration_file_creates_partial_unique_index(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "m008", "alembic/versions/008_unique_open_position.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        assert mod.revision == "008"
+        assert mod.down_revision == "007"
+        assert hasattr(mod, "upgrade")
+        assert hasattr(mod, "downgrade")
+
+    def test_persist_buy_closes_stale_before_creating(self):
+        """Application-level guard: _persist_buy closes existing open row first."""
+        from unittest.mock import patch, MagicMock
+
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=50000.0,
+            position_value_usd=100.0, stop_loss=48500.0, risk_dollars=3.0,
+        )
+
+        mock_asset = MagicMock()
+        mock_asset.id = 1
+
+        with patch("src.portfolio.manager.get_session") as mock_gs:
+            mock_session = MagicMock()
+            mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+            mock_session.query.return_value.filter.return_value.first.return_value = mock_asset
+
+            stale = MagicMock()
+            stale.entry_price = 50000.0
+            mock_repo = MagicMock()
+            mock_repo.get_open.return_value = [stale]
+            mock_repo.create.return_value = MagicMock(id=99)
+
+            with patch("src.portfolio.manager.PositionRepository", return_value=mock_repo):
+                portfolio._persist_buy(portfolio.positions[0], signal_id=None)
+
+            mock_repo.close.assert_called_once_with(
+                stale, portfolio.positions[0].entry_price, 0.0, "duplicate_cleanup",
+            )
+
+    def test_postgresql_partial_index_sql_content(self):
+        """Verify the migration SQL creates the correct partial unique index."""
+        with open("alembic/versions/008_unique_open_position.py") as f:
+            content = f.read()
+        assert "uq_one_open_per_asset" in content
+        assert "WHERE is_open" in content or "WHERE is_open = true" in content
+        assert "UNIQUE INDEX" in content
+        assert "paper_positions" in content
+        assert "asset_id" in content
