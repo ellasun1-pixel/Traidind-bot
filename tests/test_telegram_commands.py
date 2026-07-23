@@ -582,7 +582,7 @@ async def test_cmd_status_merges_db_and_inmemory_signals(mock_update, mock_conte
         mock_gs.return_value.__exit__ = MagicMock(return_value=False)
 
         mock_subq = MagicMock()
-        mock_session.query.return_value.group_by.return_value.subquery.return_value = mock_subq
+        mock_session.query.return_value.filter.return_value.group_by.return_value.subquery.return_value = mock_subq
         mock_session.query.return_value.join.return_value.join.return_value.all.return_value = [mock_signal]
 
         await cmd_status(mock_update, mock_context)
@@ -593,8 +593,8 @@ async def test_cmd_status_merges_db_and_inmemory_signals(mock_update, mock_conte
 
 
 @pytest.mark.asyncio
-async def test_cmd_status_db_overrides_inmemory_for_same_asset(mock_update, mock_context):
-    """When both DB and in-memory have a signal for the same asset, DB wins."""
+async def test_cmd_status_inmemory_overrides_db_for_same_asset(mock_update, mock_context):
+    """When both DB and in-memory have a signal for the same asset, in-memory wins."""
     from src.strategy.engine import TradeSignal
     from src.strategy.regime import MarketRegime
 
@@ -616,6 +616,7 @@ async def test_cmd_status_db_overrides_inmemory_for_same_asset(mock_update, mock
     mock_signal.asset.symbol = "BTC/USD"
     mock_signal.regime = "TREND"
     mock_signal.signal_type = "BUY"
+    mock_signal.status = "pending"
     mock_signal.created_at = MagicMock()
 
     with patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
@@ -628,10 +629,11 @@ async def test_cmd_status_db_overrides_inmemory_for_same_asset(mock_update, mock
         mock_gs.return_value.__exit__ = MagicMock(return_value=False)
 
         mock_subq = MagicMock()
-        mock_session.query.return_value.group_by.return_value.subquery.return_value = mock_subq
+        mock_session.query.return_value.filter.return_value.group_by.return_value.subquery.return_value = mock_subq
         mock_session.query.return_value.join.return_value.join.return_value.all.return_value = [mock_signal]
 
         await cmd_status(mock_update, mock_context)
 
     text = mock_update.message.reply_text.call_args[0][0]
-    assert "BUY" in text, "DB signal (BUY) should override in-memory (NO_TRADE)"
+    assert "NO\\_TRADE" in text or "NO_TRADE" in text, \
+        "In-memory signal (NO_TRADE) should override stale DB signal (BUY)"

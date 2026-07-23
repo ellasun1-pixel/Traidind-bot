@@ -100,6 +100,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         Signal.asset_id,
                         sqla_func.max(Signal.created_at).label("latest"),
                     )
+                    .filter(Signal.status == "pending")
                     .group_by(Signal.asset_id)
                     .subquery()
                 )
@@ -122,7 +123,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 val.regime.value if val.regime else "UNKNOWN",
                 val.signal_type,
             )
-        last_signals.update(db_signals)
+        for sym, val in db_signals.items():
+            if sym not in last_signals:
+                last_signals[sym] = val
         if last_signals:
             status_lines.append("*Latest regimes:*")
             for symbol, val in last_signals.items():
