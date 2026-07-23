@@ -446,15 +446,22 @@ class TestMarketCheckJob:
                 raise RuntimeError("BTC fetch failed")
             return {"symbol": "ETH", "status": "ok", "signal_type": "NO_TRADE", "error": None}
 
-        with patch("src.scheduler.jobs._process_single_asset", side_effect=mock_process):
-            with patch("src.scheduler.jobs.get_session") as mock_gs:
-                mock_session = MagicMock()
-                mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
-                mock_gs.return_value.__exit__ = MagicMock(return_value=False)
-                mock_repo = MagicMock()
-                mock_repo.try_acquire_lock.return_value = True
-                with patch("src.scheduler.jobs.SchedulerStateRepository", return_value=mock_repo):
-                    await jobs.market_check_job()
+        mock_portfolio = MagicMock()
+        mock_portfolio.is_challenge_active = True
+        with patch("src.scheduler.jobs._process_single_asset", side_effect=mock_process), \
+             patch("src.scheduler.jobs.get_portfolio", return_value=mock_portfolio), \
+             patch("src.scheduler.jobs.datetime") as mock_dt, \
+             patch("src.scheduler.jobs.get_session") as mock_gs, \
+             patch("src.scheduler.jobs.SchedulerStateRepository") as mock_sched_cls:
+            mock_dt.now.return_value = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            mock_session = MagicMock()
+            mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+            mock_repo = MagicMock()
+            mock_repo.try_acquire_lock.return_value = True
+            mock_sched_cls.return_value = mock_repo
+            await jobs.market_check_job()
 
         settings.assets = old_assets
         assert call_count == 2
