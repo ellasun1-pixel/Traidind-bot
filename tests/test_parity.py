@@ -131,14 +131,13 @@ class TestProductionBacktestParity:
                     )
                     break
 
-    def test_buy_allowed_below_ema200(self):
-        """BUY is allowed when price < EMA200 (EMA200 gate removed)."""
+    def test_buy_blocked_below_ema200(self):
+        """BUY is blocked when price < EMA200 — TREND regime requires price > EMA200."""
         df = _build_candles(n_days=400, trend=-0.002, seed=300)
         engine_df = to_engine_df(df)
         daily = compute_indicators(engine_df)
 
         engine = StrategyEngine()
-        found_buy_below_ema200 = False
         for i in range(252, len(daily) - 1):
             row = daily.iloc[i]
             close = float(row["close"])
@@ -154,10 +153,9 @@ class TestProductionBacktestParity:
                     open_positions=[],
                     total_open_risk_usd=0.0,
                 )
-                if signal.signal_type == "BUY":
-                    found_buy_below_ema200 = True
-                    break
-        assert found_buy_below_ema200, "Should be able to BUY below EMA200 after gate removal"
+                assert signal.signal_type != "BUY", \
+                    "BUY should never fire below EMA200 (not TREND regime)"
+                break
 
     def test_no_buy_without_candle_confirmation(self):
         """No BUY when prev close <= prev EMA50 — both engines agree."""

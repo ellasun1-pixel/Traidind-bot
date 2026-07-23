@@ -791,3 +791,138 @@ class TestLoggingDiagnostics:
         pipeline.get_health("ETH/USD").current_provider = "coinbase"
         assert pipeline.get_health("BTC/USD").current_provider == "kraken"
         assert pipeline.get_health("ETH/USD").current_provider == "coinbase"
+
+
+# ── AUDIT 8: TREND-Only BUY + Risk Parameters ─────────────────
+
+class TestTrendOnlyBuyRestriction:
+    """BUY signals are only emitted in TREND regime."""
+
+    def _make_engine_with_trend_data(self, regime_overrides: dict | None = None):
+        engine = StrategyEngine()
+        df = compute_indicators(_make_trend_df(base_price=50000))
+        current_price = float(df.iloc[-1]["close"])
+        defaults = {
+            "er20": 0.6,
+            "ema200": current_price * 0.85,
+            "ema50": current_price * 0.90,
+            "price_change_short": 0.01,
+            "rvol": 0.3,
+            "rvol_median_252": 0.3,
+            "rvol_pct25": 0.2,
+            "price_change_48h": 0.02,
+        }
+        if regime_overrides:
+            defaults.update(regime_overrides)
+        for k, v in defaults.items():
+            df.loc[df.index[-1], k] = v
+        df.loc[df.index[-2], "close"] = current_price * 0.91
+        df.loc[df.index[-2], "ema50"] = current_price * 0.88
+        return engine, df, current_price
+
+    def test_chop_regime_blocks_buy(self):
+        """CHOP regime → NO_TRADE, never BUY."""
+        engine, df, price = self._make_engine_with_trend_data({
+            "er20": 0.1,
+            "ema200": price * 1.1 if False else 60000,
+        })
+        df.loc[df.index[-1], "er20"] = 0.1
+        df.loc[df.index[-1], "ema200"] = price * 1.1
+        with patch("src.strategy.engine.compute_indicators", return_value=df):
+            signal = engine.analyze("BTC/USD", df, df, price, 1000.0, [], 0.0)
+        assert signal.signal_type == "NO_TRADE"
+
+    def test_lowvol_regime_blocks_buy(self):
+        """LOWVOL regime → NO_TRADE, never BUY."""
+        engine, df, price = self._make_engine_with_trend_data()
+        df.loc[df.index[-1], "er20"] = 0.1
+        df.loc[df.index[-1], "rvol"] = 0.05
+        df.loc[df.index[-1], "rvol_pct25"] = 0.10
+        df.loc[df.index[-1], "ema200"] = price * 1.05
+        with patch("src.strategy.engine.compute_indicators", return_value=df):
+            signal = engine.analyze("BTC/USD", df, df, price, 1000.0, [], 0.0)
+        assert signal.signal_type != "BUY"
+
+    def test_panic_regime_blocks_buy(self):
+        """PANIC regime → NO_TRADE or SELL, never BUY."""
+        engine, df, price = self._make_engine_with_trend_data()
+        df.loc[df.index[-1], "price_change_48h"] = -0.15
+        df.loc[df.index[-1], "rvol"] = 1.0
+        df.loc[df.index[-1], "rvol_median_252"] = 0.3
+        with patch("src.strategy.engine.compute_indicators", return_value=df):
+            signal = engine.analyze("BTC/USD", df, df, price, 1000.0, [], 0.0)
+        assert signal.signal_type != "BUY"
+
+    def test_trend_regime_allows_buy(self):
+        """TREND regime with all conditions → BUY."""
+        engine, df, price = self._make_engine_with_trend_data()
+        with patch("src.strategy.engine.compute_indicators", return_value=df):
+            signal = engine.analyze("BTC/USD", df, df, price, 1000.0, [], 0.0)
+        assert signal.signal_type == "BUY"
+        assert signal.regime == MarketRegime.TREND
+
+
+class TestRiskParameterBoundaries:
+    """Verify risk parameter values and position sizing with updated config."""
+
+    def test_risk_pct_default_is_1_8(self):
+        assert settings.risk_per_trade_pct_default == 0.018
+
+    def test_risk_pct_min_is_1_5(self):
+        assert settings.risk_per_trade_pct_min == 0.015
+
+    def test_risk_pct_max_is_2_2(self):
+        assert settings.risk_per_trade_pct_max == 0.022
+
+    def test_max_total_open_risk_is_4_pct(self):
+        assert settings.max_total_open_risk_pct == 0.04
+
+    def test_position_sizing_produces_approx_600(self):
+        """Default 1.8% risk with 3% stop → ~$600 position."""
+        risk_dollars = settings.starting_balance * settings.risk_per_trade_pct_default
+        stop_distance = 0.03
+        position_value = risk_dollars / stop_distance
+        assert 550 <= position_value <= 650
+
+    def test_single_loss_survives_975_cutoff(self):
+        """One full loss at default risk leaves balance above $975."""
+        risk_dollars = settings.starting_balance * settings.risk_per_trade_pct_default
+        balance_after = settings.starting_balance - risk_dollars
+        assert balance_after > 975
+
+    def test_two_losses_above_defeat(self):
+        """Two full losses at default risk still above $950 defeat level."""
+        risk_dollars = settings.starting_balance * settings.risk_per_trade_pct_default
+        balance_after = settings.starting_balance - 2 * risk_dollars
+        assert balance_after > settings.loss_level
+
+    def test_max_open_positions_unchanged(self):
+        assert settings.max_open_positions == 2
+
+    def test_buy_signal_position_size_within_bounds(self):
+        """A BUY signal's position_size_usd respects circuit breakers."""
+        engine = StrategyEngine()
+        df = compute_indicators(_make_trend_df(base_price=50000))
+        current_price = float(df.iloc[-1]["close"])
+        df.loc[df.index[-1], "er20"] = 0.6
+        df.loc[df.index[-1], "ema200"] = current_price * 0.85
+        df.loc[df.index[-1], "ema50"] = current_price * 0.90
+        df.loc[df.index[-2], "close"] = current_price * 0.91
+        df.loc[df.index[-2], "ema50"] = current_price * 0.88
+        df.loc[df.index[-1], "price_change_short"] = 0.01
+        df.loc[df.index[-1], "rvol"] = 0.3
+        df.loc[df.index[-1], "rvol_median_252"] = 0.3
+        df.loc[df.index[-1], "rvol_pct25"] = 0.2
+        df.loc[df.index[-1], "price_change_48h"] = 0.02
+
+        balance = 1000.0
+        with patch("src.strategy.engine.compute_indicators", return_value=df):
+            signal = engine.analyze("BTC/USD", df, df, current_price, balance, [], 0.0)
+
+        assert signal.signal_type == "BUY"
+        raw_position = settings.starting_balance * settings.risk_per_trade_pct_default / 0.03
+        capped = min(raw_position, balance * 0.50)
+        assert abs(signal.position_size_usd - capped) < 1.0
+        assert signal.max_loss_usd == round(
+            settings.starting_balance * settings.risk_per_trade_pct_default, 2
+        )
