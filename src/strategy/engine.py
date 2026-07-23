@@ -258,6 +258,9 @@ class StrategyEngine:
             return None
 
         stop_distance_pct = 0.03
+        expected_profit_pct = stop_distance_pct * self.take_profit_multiple
+        if expected_profit_pct <= min_expected_profit_pct:
+            return None
         risk_pct = settings.risk_per_trade_pct_default
 
         risk_dollars = settings.starting_balance * risk_pct

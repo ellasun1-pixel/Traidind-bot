@@ -926,3 +926,27 @@ class TestRiskParameterBoundaries:
         assert signal.max_loss_usd == round(
             settings.starting_balance * settings.risk_per_trade_pct_default, 2
         )
+
+    def test_buy_blocked_when_profit_below_cost_threshold(self):
+        """BUY rejected if expected profit doesn't clearly exceed commission+spread."""
+        engine = StrategyEngine()
+        engine.take_profit_multiple = 0.1
+
+        df = compute_indicators(_make_trend_df(base_price=50000))
+        current_price = float(df.iloc[-1]["close"])
+        df.loc[df.index[-1], "er20"] = 0.6
+        df.loc[df.index[-1], "ema200"] = current_price * 0.85
+        df.loc[df.index[-1], "ema50"] = current_price * 0.90
+        df.loc[df.index[-2], "close"] = current_price * 0.91
+        df.loc[df.index[-2], "ema50"] = current_price * 0.88
+        df.loc[df.index[-1], "price_change_short"] = 0.01
+        df.loc[df.index[-1], "rvol"] = 0.3
+        df.loc[df.index[-1], "rvol_median_252"] = 0.3
+        df.loc[df.index[-1], "rvol_pct25"] = 0.2
+        df.loc[df.index[-1], "price_change_48h"] = 0.02
+
+        with patch("src.strategy.engine.compute_indicators", return_value=df):
+            signal = engine.analyze("BTC/USD", df, df, current_price, 1000.0, [], 0.0)
+
+        assert signal.signal_type == "NO_TRADE", \
+            f"Expected NO_TRADE when profit < cost threshold, got {signal.signal_type}"
