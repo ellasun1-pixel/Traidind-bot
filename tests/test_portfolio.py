@@ -114,11 +114,11 @@ class TestRiskBudgetEnforcement:
         assert "positions" in msg.lower()
 
     def test_exceeds_risk_budget(self, portfolio):
-        ok, msg = portfolio.confirm_buy("BTC/USD", 50000, 100, 48500, 16.0)
+        ok, msg = portfolio.confirm_buy("BTC/USD", 50000, 100, 48500, 25.0)
         assert not ok
 
     def test_within_new_risk_budget(self, portfolio):
-        ok, msg = portfolio.confirm_buy("BTC/USD", 50000, 400, 48500, 13.0)
+        ok, msg = portfolio.confirm_buy("BTC/USD", 50000, 400, 48500, 18.0)
         assert ok
 
 

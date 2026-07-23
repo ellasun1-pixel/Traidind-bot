@@ -47,10 +47,10 @@ class AppSettings(BaseSettings):
     starting_balance: float = 1000.0
     win_level: float = 1120.0
     loss_level: float = 950.0
-    risk_per_trade_pct_min: float = 0.012
-    risk_per_trade_pct_max: float = 0.015
-    risk_per_trade_pct_default: float = 0.013
-    max_total_open_risk_pct: float = 0.03
+    risk_per_trade_pct_min: float = 0.015
+    risk_per_trade_pct_max: float = 0.022
+    risk_per_trade_pct_default: float = 0.018
+    max_total_open_risk_pct: float = 0.04
     max_open_positions: int = 2
     commission_pct: float = 0.0026
     spread_pct: float = 0.001

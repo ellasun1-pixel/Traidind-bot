@@ -254,17 +254,11 @@ class StrategyEngine:
         commission_spread = settings.commission_pct + settings.spread_pct
         min_expected_profit_pct = commission_spread * 3
 
-        if regime == MarketRegime.TREND:
-            stop_distance_pct = 0.03
-            risk_pct = settings.risk_per_trade_pct_default
-        elif regime == MarketRegime.CHOP:
-            stop_distance_pct = 0.025
-            risk_pct = settings.risk_per_trade_pct_min
-        elif regime == MarketRegime.LOWVOL:
-            stop_distance_pct = 0.02
-            risk_pct = settings.risk_per_trade_pct_min
-        else:
+        if regime != MarketRegime.TREND:
             return None
+
+        stop_distance_pct = 0.03
+        risk_pct = settings.risk_per_trade_pct_default
 
         risk_dollars = settings.starting_balance * risk_pct
         max_total_risk = settings.starting_balance * settings.max_total_open_risk_pct

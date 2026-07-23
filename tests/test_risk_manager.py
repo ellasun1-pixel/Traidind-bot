@@ -35,7 +35,7 @@ class TestRiskBudget:
 
     def test_exceeds_total_risk(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=15.0,
+            proposed_risk_usd=22.0,
             current_open_risk_usd=20.0,
 
             open_positions_count=1,
@@ -45,7 +45,7 @@ class TestRiskBudget:
 
     def test_exceeds_per_trade_max(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=16.0,
+            proposed_risk_usd=23.0,
             current_open_risk_usd=0.0,
 
             open_positions_count=0,
@@ -55,7 +55,7 @@ class TestRiskBudget:
 
     def test_at_per_trade_max_boundary(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=15.0,
+            proposed_risk_usd=22.0,
             current_open_risk_usd=0.0,
 
             open_positions_count=0,
@@ -64,8 +64,8 @@ class TestRiskBudget:
 
     def test_at_total_risk_boundary(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=15.0,
-            current_open_risk_usd=15.0,
+            proposed_risk_usd=20.0,
+            current_open_risk_usd=20.0,
 
             open_positions_count=1,
         )
@@ -73,8 +73,8 @@ class TestRiskBudget:
 
     def test_just_over_total_risk_boundary(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=15.0,
-            current_open_risk_usd=15.01,
+            proposed_risk_usd=20.0,
+            current_open_risk_usd=20.01,
 
             open_positions_count=1,
         )
