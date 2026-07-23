@@ -11,7 +11,7 @@ from telegram.ext import (
 )
 
 from src.config import settings, AgentMode
-from src.scheduler.jobs import get_portfolio, get_last_signals, get_scheduler_status, get_pipeline, record_portfolio_snapshot, get_live_prices
+from src.scheduler.jobs import get_portfolio, get_last_signals, clear_last_signals, get_scheduler_status, get_pipeline, record_portfolio_snapshot, get_live_prices
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session, AuditLog
 from src.database.models import Signal, Asset
@@ -774,6 +774,7 @@ async def cmd_new_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         portfolio = get_portfolio()
         archive, msg = portfolio.start_new_challenge()
+        clear_last_signals()
 
         try:
             with get_session() as session:

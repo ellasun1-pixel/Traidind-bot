@@ -272,6 +272,29 @@ class TestNewChallenge:
         assert "WON" in msg
         assert "$1000.00" in msg or "$1,000.00" in msg
 
+    def test_new_challenge_expires_pending_signals(self):
+        """start_new_challenge must call _expire_all_pending_signals."""
+        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio.challenge_status = "lost"
+        from unittest.mock import patch
+        with patch.object(portfolio, "_expire_all_pending_signals") as mock_expire:
+            portfolio.start_new_challenge()
+        mock_expire.assert_called_once()
+
+
+class TestClearLastSignals:
+    def test_clear_last_signals_empties_cache(self):
+        from src.scheduler.jobs import _last_signals, clear_last_signals
+        from src.strategy.engine import TradeSignal
+        from src.strategy.regime import MarketRegime
+        _last_signals["BTC/USD"] = TradeSignal(
+            signal_type="BUY", priority="HIGH",
+            asset_symbol="BTC/USD", regime=MarketRegime.TREND,
+        )
+        assert len(_last_signals) > 0
+        clear_last_signals()
+        assert len(_last_signals) == 0
+
 
 class TestEquityBasedDistances:
     def test_distance_to_win_uses_equity_not_cash(self):

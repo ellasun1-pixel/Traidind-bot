@@ -100,6 +100,10 @@ def get_last_signals() -> dict[str, TradeSignal]:
     return _last_signals
 
 
+def clear_last_signals() -> None:
+    _last_signals.clear()
+
+
 def get_pipeline() -> MarketDataPipeline:
     global _pipeline
     if _pipeline is None:

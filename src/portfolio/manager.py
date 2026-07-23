@@ -284,6 +284,7 @@ class PaperPortfolio:
         }
 
         self._close_all_db_positions()
+        self._expire_all_pending_signals()
 
         self.balance_usd = self.starting_balance
         self.peak_balance = self.starting_balance
@@ -324,6 +325,21 @@ class PaperPortfolio:
                 )
         except Exception as e:
             logger.error("Failed to close DB positions on challenge reset: %s", e)
+
+    def _expire_all_pending_signals(self) -> None:
+        try:
+            with get_session() as session:
+                from src.database.models import Signal
+                count = (
+                    session.query(Signal)
+                    .filter(Signal.status == "pending")
+                    .update({"status": "expired"}, synchronize_session="fetch")
+                )
+                session.flush()
+                if count:
+                    logger.warning("Expired %d pending signal(s) on challenge reset", count)
+        except Exception as e:
+            logger.error("Failed to expire signals on challenge reset: %s", e)
 
     def reset_challenge_status(self, prices: dict[str, float] | None = None) -> str:
         old = self.challenge_status
