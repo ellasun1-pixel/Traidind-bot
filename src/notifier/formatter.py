@@ -160,7 +160,8 @@ class SignalFormatter:
                       last_signals: dict = None,
                       pending_signals: list = None,
                       scheduler_info: dict = None,
-                      overnight_events: list = None) -> str:
+                      overnight_events: list = None,
+                      health_components: dict = None) -> str:
         if report_type == "morning":
             header = "☀️ *Morning Report*"
         else:
@@ -226,11 +227,22 @@ class SignalFormatter:
         paused = settings.agent_mode.value == "PAUSED"
         lines.append(f"Trading: {'Paused' if paused else 'Active'}")
         lines.append(f"System Health: {health_status}")
+        if health_components and health_status != "HEALTHY":
+            ok = [n for n, c in health_components.items() if c.status.value == "HEALTHY"]
+            not_ok = [(n, c) for n, c in health_components.items() if c.status.value != "HEALTHY"]
+            total = len(health_components)
+            lines.append(f"  {len(ok)}/{total} OK, {len(not_ok)} degraded:")
+            for name, comp in not_ok:
+                lines.append(f"  • {_esc(name)}: {_esc(comp.message)}")
 
         if scheduler_info:
-            last_check = scheduler_info.get("last_market_check", "Unavailable")
+            skip_reason = scheduler_info.get("skip_reason")
+            if skip_reason:
+                lines.append(f"Last Market Check: {_esc(skip_reason)}")
+            else:
+                last_check = scheduler_info.get("last_market_check", "Unavailable")
+                lines.append(f"Last Market Check: {last_check}")
             next_check = scheduler_info.get("next_market_check", "Unavailable")
-            lines.append(f"Last Market Check: {last_check}")
             lines.append(f"Next Market Check: {next_check}")
             fail_count = scheduler_info.get("failure_count")
             if fail_count:
