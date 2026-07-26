@@ -440,6 +440,19 @@ async def expire_signals_job():
         logger.error("expire_signals failed: %s", e, exc_info=True)
 
 
+def _get_market_check_skip_reason() -> str | None:
+    if settings.agent_mode == AgentMode.PAUSED:
+        return "Skipped (agent paused)"
+    tz_local = pytz.timezone(settings.timezone)
+    current_hour = datetime.now(tz_local).hour
+    if current_hour < 8 or current_hour >= 23:
+        return f"Skipped (outside active hours, {current_hour:02d}:00 {settings.timezone})"
+    portfolio = get_portfolio()
+    if not portfolio.is_challenge_active:
+        return f"Skipped (challenge {portfolio.challenge_status})"
+    return None
+
+
 async def _build_report(report_type: str) -> str:
     portfolio = get_portfolio()
     pipeline = get_pipeline()
@@ -492,6 +505,10 @@ async def _build_report(report_type: str) -> str:
                     scheduler_info["failure_count"] = s.failure_count
                     if s.last_error:
                         scheduler_info["last_error"] = s.last_error[:120]
+
+        skip_reason = _get_market_check_skip_reason()
+        if skip_reason:
+            scheduler_info["skip_reason"] = skip_reason
     except Exception:
         pass
 
@@ -535,6 +552,7 @@ async def _build_report(report_type: str) -> str:
         pending_signals=pending_signals or None,
         scheduler_info=scheduler_info or None,
         overnight_events=overnight_events or None,
+        health_components=system.components or None,
     )
 
 

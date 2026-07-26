@@ -468,6 +468,56 @@ class TestMarketCheckJob:
 
 
 # ──────────────────────────────────────────────
+# Section 7b: _get_market_check_skip_reason
+# ──────────────────────────────────────────────
+
+class TestMarketCheckSkipReason:
+    def test_returns_none_when_active(self):
+        from src.scheduler.jobs import _get_market_check_skip_reason
+        mock_portfolio = MagicMock()
+        mock_portfolio.is_challenge_active = True
+        with patch("src.scheduler.jobs.settings") as mock_settings, \
+             patch("src.scheduler.jobs.datetime") as mock_dt, \
+             patch("src.scheduler.jobs.get_portfolio", return_value=mock_portfolio):
+            mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
+            mock_settings.timezone = "UTC"
+            mock_dt.now.return_value = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
+            assert _get_market_check_skip_reason() is None
+
+    def test_returns_paused_reason(self):
+        from src.scheduler.jobs import _get_market_check_skip_reason
+        with patch("src.scheduler.jobs.settings") as mock_settings:
+            mock_settings.agent_mode = AgentMode.PAUSED
+            result = _get_market_check_skip_reason()
+            assert "paused" in result.lower()
+
+    def test_returns_outside_hours_reason(self):
+        from src.scheduler.jobs import _get_market_check_skip_reason
+        with patch("src.scheduler.jobs.settings") as mock_settings, \
+             patch("src.scheduler.jobs.datetime") as mock_dt:
+            mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
+            mock_settings.timezone = "UTC"
+            mock_dt.now.return_value = datetime(2025, 1, 15, 3, 0, tzinfo=timezone.utc)
+            result = _get_market_check_skip_reason()
+            assert "outside active hours" in result.lower()
+
+    def test_returns_challenge_inactive_reason(self):
+        from src.scheduler.jobs import _get_market_check_skip_reason
+        mock_portfolio = MagicMock()
+        mock_portfolio.is_challenge_active = False
+        mock_portfolio.challenge_status = "won"
+        with patch("src.scheduler.jobs.settings") as mock_settings, \
+             patch("src.scheduler.jobs.datetime") as mock_dt, \
+             patch("src.scheduler.jobs.get_portfolio", return_value=mock_portfolio):
+            mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
+            mock_settings.timezone = "UTC"
+            mock_dt.now.return_value = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
+            result = _get_market_check_skip_reason()
+            assert "challenge" in result.lower()
+            assert "won" in result.lower()
+
+
+# ──────────────────────────────────────────────
 # Section 8: Expire signals job
 # ──────────────────────────────────────────────
 

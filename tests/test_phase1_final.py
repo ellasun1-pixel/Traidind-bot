@@ -338,6 +338,203 @@ class TestReportFormatting:
         text = fmt.format_report("morning", self._portfolio_summary())
         assert "night mode" not in text
 
+    def test_report_skip_reason_replaces_timestamp(self):
+        fmt = SignalFormatter(beginner_mode=False)
+        sched = {
+            "last_market_check": "12:00 UTC",
+            "next_market_check": "~15 min",
+            "skip_reason": "Skipped (outside active hours, 03:00 US/Eastern)",
+        }
+        text = fmt.format_report("morning", self._portfolio_summary(), scheduler_info=sched)
+        assert "Skipped (outside active hours" in text
+        assert "12:00 UTC" not in text
+
+    def test_report_no_skip_reason_shows_timestamp(self):
+        fmt = SignalFormatter(beginner_mode=False)
+        sched = {"last_market_check": "14:30 UTC", "next_market_check": "~15 min"}
+        text = fmt.format_report("morning", self._portfolio_summary(), scheduler_info=sched)
+        assert "14:30 UTC" in text
+
+    def test_report_health_components_shown_when_degraded(self):
+        from src.health.models import ComponentHealth, HealthStatus
+        fmt = SignalFormatter(beginner_mode=False)
+        components = {
+            "database": ComponentHealth(
+                name="database", status=HealthStatus.HEALTHY, message="OK"),
+            "scheduler": ComponentHealth(
+                name="scheduler", status=HealthStatus.DEGRADED,
+                message="1/3 jobs stale: market_check"),
+            "telegram": ComponentHealth(
+                name="telegram", status=HealthStatus.HEALTHY, message="Connected"),
+        }
+        text = fmt.format_report(
+            "morning", self._portfolio_summary(),
+            health_status="DEGRADED", health_components=components,
+        )
+        assert "2/3 OK" in text
+        assert "1 degraded" in text
+        assert "scheduler" in text
+        assert "1/3 jobs stale" in text
+
+    def test_report_health_components_hidden_when_healthy(self):
+        from src.health.models import ComponentHealth, HealthStatus
+        fmt = SignalFormatter(beginner_mode=False)
+        components = {
+            "database": ComponentHealth(
+                name="database", status=HealthStatus.HEALTHY, message="OK"),
+            "scheduler": ComponentHealth(
+                name="scheduler", status=HealthStatus.HEALTHY, message="OK"),
+        }
+        text = fmt.format_report(
+            "morning", self._portfolio_summary(),
+            health_status="HEALTHY", health_components=components,
+        )
+        assert "degraded:" not in text
+
+
+# ── Build Report Integration ──────────────────────────────────
+
+class TestBuildReportIntegration:
+    """Integration tests that exercise _build_report end-to-end to catch
+    wiring issues where unit tests pass but the actual report path is broken."""
+
+    @pytest.mark.asyncio
+    async def test_build_report_includes_skip_reason_when_outside_hours(self):
+        """Verify _build_report actually passes skip_reason through to the
+        formatter output — not just that the helper returns it."""
+        from src.scheduler.jobs import _build_report
+        from src.health.models import ComponentHealth, SystemHealth, HealthStatus
+
+        mock_portfolio = MagicMock()
+        mock_portfolio.is_challenge_active = True
+        mock_portfolio.get_portfolio_summary.return_value = {
+            "balance_usd": 1000.0, "total_equity": 1000.0,
+            "realized_pnl": 0.0, "unrealized_pnl": 0.0,
+            "drawdown_pct": 0.0, "peak_balance": 1000.0,
+            "distance_to_win": 120.0, "distance_to_loss": 50.0,
+            "challenge_status": "active", "open_positions_count": 0,
+            "total_trades": 0, "open_positions": [],
+        }
+
+        mock_system = SystemHealth(status=HealthStatus.HEALTHY, checked_at=datetime.now(timezone.utc))
+        mock_system.add(ComponentHealth(name="database", status=HealthStatus.HEALTHY, message="OK"))
+        mock_health = MagicMock()
+        mock_health.check_all.return_value = mock_system
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.get_prices = AsyncMock(return_value=(None, None))
+
+        mock_sched_state = MagicMock()
+        mock_sched_state.job_name = "market_check"
+        mock_sched_state.last_success_at = datetime(2025, 1, 14, 19, 27, tzinfo=timezone.utc)
+        mock_sched_state.run_count = 50
+        mock_sched_state.success_count = 48
+        mock_sched_state.failure_count = 2
+        mock_sched_state.last_error = None
+
+        mock_sched_repo = MagicMock()
+        mock_sched_repo.get_all.return_value = [mock_sched_state]
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+
+        with patch("src.scheduler.jobs.get_portfolio", return_value=mock_portfolio), \
+             patch("src.scheduler.jobs.get_health_service", return_value=mock_health), \
+             patch("src.scheduler.jobs.get_pipeline", return_value=mock_pipeline), \
+             patch("src.scheduler.jobs.settings") as mock_settings, \
+             patch("src.scheduler.jobs.datetime") as mock_dt, \
+             patch("src.scheduler.jobs.get_session") as mock_gs, \
+             patch("src.scheduler.jobs.SchedulerStateRepository", return_value=mock_sched_repo), \
+             patch("src.scheduler.jobs._last_signals", {}):
+            mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
+            mock_settings.timezone = "UTC"
+            mock_settings.starting_balance = 1000.0
+            mock_settings.check_interval_minutes = 15
+            mock_settings.assets = []
+            mock_settings.strategy_version = "1.0"
+            mock_dt.now.return_value = datetime(2025, 1, 15, 3, 0, tzinfo=timezone.utc)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+            text = await _build_report("morning")
+
+        assert "Skipped (outside active hours" in text, \
+            f"Expected skip reason in report, got:\n{text}"
+        assert "19:27 UTC" not in text, \
+            "Stale timestamp should be replaced by skip reason"
+
+    @pytest.mark.asyncio
+    async def test_build_report_includes_health_breakdown_when_degraded(self):
+        """Verify _build_report passes health_components through and the
+        formatter renders per-component detail when DEGRADED."""
+        from src.scheduler.jobs import _build_report
+        from src.health.models import ComponentHealth, SystemHealth, HealthStatus
+
+        mock_portfolio = MagicMock()
+        mock_portfolio.is_challenge_active = True
+        mock_portfolio.get_portfolio_summary.return_value = {
+            "balance_usd": 1000.0, "total_equity": 1000.0,
+            "realized_pnl": 0.0, "unrealized_pnl": 0.0,
+            "drawdown_pct": 0.0, "peak_balance": 1000.0,
+            "distance_to_win": 120.0, "distance_to_loss": 50.0,
+            "challenge_status": "active", "open_positions_count": 0,
+            "total_trades": 0, "open_positions": [],
+        }
+
+        mock_system = SystemHealth(status=HealthStatus.DEGRADED, checked_at=datetime.now(timezone.utc))
+        mock_system.add(ComponentHealth(name="database", status=HealthStatus.HEALTHY, message="OK"))
+        mock_system.add(ComponentHealth(
+            name="market_data", status=HealthStatus.DEGRADED,
+            message="Stale data for: DOGE, AVAX"))
+        mock_system.add(ComponentHealth(name="telegram", status=HealthStatus.HEALTHY, message="Connected"))
+        mock_health = MagicMock()
+        mock_health.check_all.return_value = mock_system
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.get_prices = AsyncMock(return_value=(None, None))
+
+        mock_sched_state = MagicMock()
+        mock_sched_state.job_name = "market_check"
+        mock_sched_state.last_success_at = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
+        mock_sched_state.run_count = 50
+        mock_sched_state.success_count = 50
+        mock_sched_state.failure_count = 0
+        mock_sched_state.last_error = None
+
+        mock_sched_repo = MagicMock()
+        mock_sched_repo.get_all.return_value = [mock_sched_state]
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+
+        with patch("src.scheduler.jobs.get_portfolio", return_value=mock_portfolio), \
+             patch("src.scheduler.jobs.get_health_service", return_value=mock_health), \
+             patch("src.scheduler.jobs.get_pipeline", return_value=mock_pipeline), \
+             patch("src.scheduler.jobs.settings") as mock_settings, \
+             patch("src.scheduler.jobs.datetime") as mock_dt, \
+             patch("src.scheduler.jobs.get_session") as mock_gs, \
+             patch("src.scheduler.jobs.SchedulerStateRepository", return_value=mock_sched_repo), \
+             patch("src.scheduler.jobs._last_signals", {}):
+            mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
+            mock_settings.timezone = "UTC"
+            mock_settings.starting_balance = 1000.0
+            mock_settings.check_interval_minutes = 15
+            mock_settings.assets = []
+            mock_settings.strategy_version = "1.0"
+            mock_dt.now.return_value = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+            text = await _build_report("morning")
+
+        assert "DEGRADED" in text
+        assert "2/3 OK" in text, \
+            f"Expected per-component breakdown in report, got:\n{text}"
+        assert "market_data" in text or "market\\_data" in text
+        assert "Stale data for" in text
+
 
 # ── Command Registration ───────────────────────────────────────
 
