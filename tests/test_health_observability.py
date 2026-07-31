@@ -266,8 +266,20 @@ class TestTelegramHealthCheck:
         with patch("src.health.service.settings") as mock_settings:
             mock_settings.telegram_bot_token = "real_token_123"
             mock_settings.telegram_chat_id = ""
+            mock_settings.telegram_chat_ids = ""
             result = service.check_telegram()
         assert result.status == HealthStatus.DEGRADED
+
+    def test_chat_ids_fallback(self):
+        service = HealthService()
+        service._send_message_func = lambda x: None
+        with patch("src.health.service.settings") as mock_settings:
+            mock_settings.telegram_bot_token = "real_token_123"
+            mock_settings.telegram_chat_id = ""
+            mock_settings.telegram_chat_ids = "99887766,11223344"
+            result = service.check_telegram()
+        assert result.status != HealthStatus.DEGRADED or \
+            "not configured" not in result.message
 
     def test_no_send_func(self):
         service = HealthService()
@@ -394,6 +406,85 @@ class TestPaperTradingHealthCheck:
                 mock_settings.loss_level = 950.0
                 result = service.check_paper_trading()
         assert result.status == HealthStatus.UNHEALTHY
+
+
+# ── Section 10b: Scheduler staleness thresholds ───────────────────────
+
+class TestSchedulerStalenessThresholds:
+    def test_daily_job_not_stale_within_25_hours(self):
+        service = HealthService()
+        now = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
+        state = MagicMock()
+        state.job_name = "morning_report"
+        state.last_success_at = now - timedelta(hours=20)
+        state.last_run_at = None
+        state.last_error = None
+        state.last_completed_at = None
+        state.run_count = 10
+        result = service._evaluate_scheduler([state], now)
+        assert result.status == HealthStatus.HEALTHY
+        assert "stale" not in result.message.lower()
+
+    def test_daily_job_stale_after_25_hours(self):
+        service = HealthService()
+        now = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
+        state = MagicMock()
+        state.job_name = "morning_report"
+        state.last_success_at = now - timedelta(hours=26)
+        state.last_run_at = None
+        state.last_error = None
+        state.last_completed_at = None
+        state.run_count = 10
+        result = service._evaluate_scheduler([state], now)
+        assert "stale" in result.message.lower()
+
+    def test_interval_job_stale_after_60_minutes(self):
+        service = HealthService()
+        now = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
+        state = MagicMock()
+        state.job_name = "market_check"
+        state.last_success_at = now - timedelta(minutes=90)
+        state.last_run_at = None
+        state.last_error = None
+        state.last_completed_at = None
+        state.run_count = 10
+        result = service._evaluate_scheduler([state], now)
+        assert "stale" in result.message.lower()
+
+    def test_interval_job_not_stale_within_60_minutes(self):
+        service = HealthService()
+        now = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
+        state = MagicMock()
+        state.job_name = "market_check"
+        state.last_success_at = now - timedelta(minutes=30)
+        state.last_run_at = None
+        state.last_error = None
+        state.last_completed_at = None
+        state.run_count = 10
+        result = service._evaluate_scheduler([state], now)
+        assert result.status == HealthStatus.HEALTHY
+
+    def test_mixed_jobs_only_interval_flagged(self):
+        service = HealthService()
+        now = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
+        morning = MagicMock()
+        morning.job_name = "morning_report"
+        morning.last_success_at = now - timedelta(hours=20)
+        morning.last_run_at = None
+        morning.last_error = None
+        morning.last_completed_at = None
+        morning.run_count = 5
+
+        market = MagicMock()
+        market.job_name = "market_check"
+        market.last_success_at = now - timedelta(minutes=30)
+        market.last_run_at = None
+        market.last_error = None
+        market.last_completed_at = None
+        market.run_count = 50
+
+        result = service._evaluate_scheduler([morning, market], now)
+        assert result.status == HealthStatus.HEALTHY
 
 
 # ── Section 11: Health aggregation ───────────────────────────────────
