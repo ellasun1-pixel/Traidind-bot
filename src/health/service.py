@@ -109,6 +109,12 @@ class HealthService:
             )
             return err, sig_err, paper_err
 
+    _STALE_THRESHOLDS_MINUTES = {
+        "morning_report": 25 * 60,
+        "evening_report": 25 * 60,
+    }
+    _DEFAULT_STALE_MINUTES = 60
+
     def _evaluate_scheduler(self, states, now) -> ComponentHealth:
         if not states:
             return ComponentHealth(
@@ -124,7 +130,9 @@ class HealthService:
             if last:
                 if last.tzinfo is None:
                     last = last.replace(tzinfo=timezone.utc)
-                if (now - last).total_seconds() / 60 > 60:
+                threshold = self._STALE_THRESHOLDS_MINUTES.get(
+                    s.job_name, self._DEFAULT_STALE_MINUTES)
+                if (now - last).total_seconds() / 60 > threshold:
                     stale_count += 1
                     stale_jobs.append(s.job_name)
             if s.last_error:
@@ -185,6 +193,8 @@ class HealthService:
         now = datetime.now(timezone.utc)
         token = settings.telegram_bot_token
         chat_id = settings.telegram_chat_id
+        if not chat_id and settings.telegram_chat_ids:
+            chat_id = settings.telegram_chat_ids.split(",")[0].strip()
         if not token or token.startswith("test_"):
             return ComponentHealth(
                 name="telegram", status=HealthStatus.UNHEALTHY,
