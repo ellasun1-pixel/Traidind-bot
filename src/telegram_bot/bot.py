@@ -610,12 +610,12 @@ async def _debug_asset(pipeline, asset) -> str:
     safety = await pipeline.get_analysis_ready_data(asset)
 
     if not safety.safe:
-        lines.append(f"Provider: {safety.provider_used}")
+        lines.append(f"Provider: {_esc(str(safety.provider_used))}")
         lines.append(f"Status: DATA UNAVAILABLE")
-        lines.append(f"Reason: {safety.reason}")
+        lines.append(f"Reason: {_esc(str(safety.reason))}")
         return "\n".join(lines)
 
-    lines.append(f"Provider: {safety.provider_used}")
+    lines.append(f"Provider: {_esc(str(safety.provider_used))}")
     lines.append(f"Price: ${safety.current_price:,.2f}")
     lines.append("")
 
@@ -625,8 +625,8 @@ async def _debug_asset(pipeline, asset) -> str:
     latest = enriched.iloc[-1]
     prev = enriched.iloc[-2] if len(enriched) > 1 else latest
 
-    first_ts = enriched.iloc[0].get("open_time", "?")
-    last_ts = enriched.iloc[-1].get("open_time", "?")
+    first_ts = _esc(str(enriched.iloc[0].get("open_time", "?")))
+    last_ts = _esc(str(enriched.iloc[-1].get("open_time", "?")))
 
     lines.append("*Data Quality*")
     lines.append(f"Candles: {n_candles}")
@@ -643,20 +643,20 @@ async def _debug_asset(pipeline, asset) -> str:
             if len(big_gaps) > 0:
                 lines.append(f"Gaps detected: {len(big_gaps)}")
                 worst = big_gaps.max()
-                lines.append(f"Largest gap: {worst}")
+                lines.append(f"Largest gap: {_esc(str(worst))}")
             else:
                 lines.append("Gaps: none")
 
     warmup = indicator_warmup_status(n_candles)
     not_ready = [name for name, ok in warmup.items() if not ok]
     if not_ready:
-        lines.append(f"Warm-up incomplete: {', '.join(not_ready)}")
+        lines.append(f"Warm-up incomplete: {_esc(', '.join(not_ready))}")
     else:
         lines.append("Warm-up: all indicators valid")
 
     nan_fields = regime_nan_fields(latest)
     if nan_fields:
-        lines.append(f"NaN regime inputs: {', '.join(nan_fields)}")
+        lines.append(f"NaN regime inputs: {_esc(', '.join(nan_fields))}")
     else:
         lines.append("NaN regime inputs: none")
     lines.append("")
@@ -695,7 +695,7 @@ async def _debug_asset(pipeline, asset) -> str:
 
     if regime == MarketRegime.DATA_INSUFFICIENT:
         lines.append(f"*Regime: {_esc(regime.value)}*")
-        lines.append(f"Cannot classify — NaN in: {', '.join(nan_fields)}")
+        lines.append(f"Cannot classify — NaN in: {_esc(', '.join(nan_fields))}")
         lines.append("")
         lines.append("*Signal: NO\\_TRADE*")
         lines.append("Reason: Data insufficient for regime classification")
