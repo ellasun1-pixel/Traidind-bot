@@ -402,12 +402,10 @@ async def test_cmd_debug_error_handling(mock_update, mock_context):
 
 
 @pytest.mark.asyncio
-async def test_debug_asset_escapes_underscores_in_field_names():
-    """Underscore-containing field names (rvol_median_252, price_change_48h, etc.)
-    must be escaped for Telegram Markdown so /debug doesn't crash with
-    'can't find end of the entity'."""
-    import re
-    from src.telegram_bot.bot import _debug_asset, _esc
+async def test_debug_asset_plain_text_no_markdown():
+    """_debug_asset produces plain text (no Markdown) so field names with
+    underscores (rvol_pct25, price_change_48h) never crash Telegram's parser."""
+    from src.telegram_bot.bot import _debug_asset
 
     mock_pipeline = MagicMock()
     mock_safety = MagicMock()
@@ -421,18 +419,15 @@ async def test_debug_asset_escapes_underscores_in_field_names():
 
     text = await _debug_asset(mock_pipeline, mock_asset)
 
-    unescaped = re.findall(r'(?<!\\)_', text)
-    assert not unescaped, (
-        f"Unescaped underscores in /debug output will crash Telegram Markdown parser. "
-        f"Text:\n{text}"
-    )
+    assert "*" not in text, "Plain-text output must not contain Markdown bold markers"
+    assert "HYPE/USD" in text
+    assert "kraken_adapter" in text
 
 
 @pytest.mark.asyncio
-async def test_debug_asset_escapes_nan_field_names():
-    """When indicators have NaN values, the field names (containing underscores)
-    shown in 'NaN regime inputs' and 'Warm-up incomplete' must be escaped."""
-    import re
+async def test_debug_asset_plain_text_with_nan_fields():
+    """When indicators have NaN values, field names like rvol_pct25 appear
+    in plain text without Markdown formatting — no crash risk."""
     import numpy as np
     import pandas as pd
     from src.telegram_bot.bot import _debug_asset
@@ -470,11 +465,10 @@ async def test_debug_asset_escapes_nan_field_names():
 
         text = await _debug_asset(mock_pipeline, mock_asset)
 
-    unescaped = re.findall(r'(?<!\\)_', text)
-    assert not unescaped, (
-        f"Unescaped underscores in /debug output for HYPE with short history. "
-        f"Text:\n{text}"
-    )
+    assert "━" in text, "Plain-text output should use ━ section separators"
+    assert "*" not in text, "Plain-text output must not contain Markdown bold markers"
+    assert "HYPE/USD" in text
+    assert "rvol_pct25" in text or "DATA_INSUFFICIENT" in text
 
 
 @pytest.mark.asyncio
