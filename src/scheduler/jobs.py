@@ -340,7 +340,7 @@ async def market_check_job():
 
     tz_local = pytz.timezone(settings.timezone)
     current_hour = datetime.now(tz_local).hour
-    if current_hour < 8 or current_hour >= 23:
+    if current_hour < settings.active_hours_start or current_hour >= settings.active_hours_end:
         logger.info("Outside active hours (%02d:00 %s), skipping market check", current_hour, settings.timezone)
         return
 
@@ -445,7 +445,7 @@ def _get_market_check_skip_reason() -> str | None:
         return "Skipped (agent paused)"
     tz_local = pytz.timezone(settings.timezone)
     current_hour = datetime.now(tz_local).hour
-    if current_hour < 8 or current_hour >= 23:
+    if current_hour < settings.active_hours_start or current_hour >= settings.active_hours_end:
         return f"Skipped (outside active hours, {current_hour:02d}:00 {settings.timezone})"
     portfolio = get_portfolio()
     if not portfolio.is_challenge_active:

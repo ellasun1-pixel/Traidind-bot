@@ -481,6 +481,8 @@ class TestMarketCheckSkipReason:
              patch("src.scheduler.jobs.get_portfolio", return_value=mock_portfolio):
             mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
             mock_settings.timezone = "UTC"
+            mock_settings.active_hours_start = 8
+            mock_settings.active_hours_end = 23
             mock_dt.now.return_value = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
             assert _get_market_check_skip_reason() is None
 
@@ -497,6 +499,8 @@ class TestMarketCheckSkipReason:
              patch("src.scheduler.jobs.datetime") as mock_dt:
             mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
             mock_settings.timezone = "UTC"
+            mock_settings.active_hours_start = 8
+            mock_settings.active_hours_end = 23
             mock_dt.now.return_value = datetime(2025, 1, 15, 3, 0, tzinfo=timezone.utc)
             result = _get_market_check_skip_reason()
             assert "outside active hours" in result.lower()
@@ -511,6 +515,8 @@ class TestMarketCheckSkipReason:
              patch("src.scheduler.jobs.get_portfolio", return_value=mock_portfolio):
             mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
             mock_settings.timezone = "UTC"
+            mock_settings.active_hours_start = 8
+            mock_settings.active_hours_end = 23
             mock_dt.now.return_value = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
             result = _get_market_check_skip_reason()
             assert "challenge" in result.lower()
@@ -1277,6 +1283,8 @@ class TestMarketCheckActiveHours:
         with patch("src.scheduler.jobs.settings") as mock_settings:
             mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
             mock_settings.timezone = "Asia/Jerusalem"
+            mock_settings.active_hours_start = 8
+            mock_settings.active_hours_end = 23
 
             class FakeAware:
                 hour = 3
@@ -1299,6 +1307,8 @@ class TestMarketCheckActiveHours:
         with patch("src.scheduler.jobs.settings") as mock_settings:
             mock_settings.agent_mode = AgentMode.PAPER_CHALLENGE
             mock_settings.timezone = "Asia/Jerusalem"
+            mock_settings.active_hours_start = 8
+            mock_settings.active_hours_end = 23
 
             class FakeAware:
                 hour = 10
