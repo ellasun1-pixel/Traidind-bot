@@ -99,6 +99,61 @@ assets:
     coinbase_pair: "ARB-USD"
     active: true
 
+  - symbol: "FIL/USD"
+    kraken_pair: "FILUSD"
+    coinbase_pair: "FIL-USD"
+    active: true
+
+  - symbol: "APT/USD"
+    kraken_pair: "APTUSD"
+    coinbase_pair: "APT-USD"
+    active: true
+
+  - symbol: "POL/USD"
+    kraken_pair: "POLUSD"
+    coinbase_pair: "POL-USD"
+    active: true
+
+  - symbol: "ALGO/USD"
+    kraken_pair: "ALGOUSD"
+    coinbase_pair: "ALGO-USD"
+    active: true
+
+  - symbol: "INJ/USD"
+    kraken_pair: "INJUSD"
+    coinbase_pair: "INJ-USD"
+    active: true
+
+  - symbol: "RENDER/USD"
+    kraken_pair: "RENDERUSD"
+    coinbase_pair: "RENDER-USD"
+    active: true
+
+  - symbol: "STX/USD"
+    kraken_pair: "STXUSD"
+    coinbase_pair: "STX-USD"
+    active: true
+
+  - symbol: "LDO/USD"
+    kraken_pair: "LDOUSD"
+    coinbase_pair: "LDO-USD"
+    active: true
+
+  - symbol: "CRV/USD"
+    kraken_pair: "CRVUSD"
+    coinbase_pair: "CRV-USD"
+    active: true
+
+  - symbol: "ZEC/USD"
+    kraken_pair: "XZECZUSD"
+    coinbase_pair: "ZEC-USD"
+    active: true
+
+  - symbol: "ONDO/USD"
+    kraken_pair: "ONDOUSD"
+    coinbase_pair: "ONDO-USD"
+    active: true
+
 settings:
   starting_balance: 1000.0
   win_level: 1120.0

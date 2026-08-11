@@ -562,6 +562,10 @@ ASSET_ALIASES = {
     "NEAR": "NEAR/USD", "ATOM": "ATOM/USD", "UNI": "UNI/USD",
     "AAVE": "AAVE/USD", "OP": "OP/USD", "HBAR": "HBAR/USD",
     "ETC": "ETC/USD", "ARB": "ARB/USD",
+    "FIL": "FIL/USD", "APT": "APT/USD", "POL": "POL/USD",
+    "ALGO": "ALGO/USD", "INJ": "INJ/USD", "RENDER": "RENDER/USD",
+    "STX": "STX/USD", "LDO": "LDO/USD", "CRV": "CRV/USD",
+    "ZEC": "ZEC/USD", "ONDO": "ONDO/USD",
 }
 
 
