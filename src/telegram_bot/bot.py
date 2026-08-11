@@ -855,7 +855,7 @@ async def cmd_rebalance_suggestion(update: Update, context: ContextTypes.DEFAULT
                 if safety.safe and safety.daily_df is not None:
                     daily_dfs[asset.symbol] = safety.daily_df
             except Exception:
-                pass
+                logger.warning("Failed to fetch data for %s in rebalance momentum", asset.symbol, exc_info=True)
 
         momentum = compute_5d_momentum(daily_dfs)
         total_risk = portfolio.get_total_open_risk()

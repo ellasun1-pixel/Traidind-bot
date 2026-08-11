@@ -452,6 +452,8 @@ class TestBuildReportIntegration:
             mock_settings.check_interval_minutes = 15
             mock_settings.assets = []
             mock_settings.strategy_version = "1.0"
+            mock_settings.active_hours_start = 8
+            mock_settings.active_hours_end = 23
             mock_dt.now.return_value = datetime(2025, 1, 15, 3, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
@@ -522,6 +524,8 @@ class TestBuildReportIntegration:
             mock_settings.check_interval_minutes = 15
             mock_settings.assets = []
             mock_settings.strategy_version = "1.0"
+            mock_settings.active_hours_start = 8
+            mock_settings.active_hours_end = 23
             mock_dt.now.return_value = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
