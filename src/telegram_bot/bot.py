@@ -23,6 +23,7 @@ from src.health.service import get_health_service
 from src.strategy.indicators import compute_indicators, indicator_warmup_status, WARMUP
 from src.strategy.regime import classify_regime, MarketRegime, regime_nan_fields
 from src.strategy.engine import StrategyEngine
+import pandas as pd
 from src.signals.lifecycle import InvalidTransitionError
 
 logger = logging.getLogger(__name__)
@@ -264,6 +265,15 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         position_value_usd=position_size,
                         stop_loss=stop_loss,
                         risk_dollars=max_loss,
+                        signal_id=sig.id,
+                        prices=prices,
+                    )
+                    results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
+                elif sig.signal_type == "PARTIAL_REBALANCE_SELL":
+                    ok, msg = portfolio.confirm_partial_sell(
+                        symbol=symbol,
+                        exit_price=entry_price,
+                        sell_pct=0.30,
                         signal_id=sig.id,
                         prices=prices,
                     )
@@ -804,6 +814,89 @@ async def cmd_new_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+@owner_only
+async def cmd_rebalance_suggestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from src.strategy.rebalance import (
+        find_rebalance_candidates, compute_5d_momentum,
+        generate_rebalance_suggestion, format_rebalance_message,
+        EXPERIMENTAL_WARNING,
+    )
+    try:
+        portfolio = get_portfolio()
+        prices = await get_live_prices()
+        open_positions = portfolio.get_open_positions()
+
+        if not open_positions:
+            await update.message.reply_text("No open positions to rebalance.", parse_mode=None)
+            return
+
+        candidates = find_rebalance_candidates(open_positions, prices)
+        if not candidates:
+            await update.message.reply_text(
+                "No positions near stop-loss (70%+ of entry-to-stop distance). "
+                "Rebalance not triggered.",
+                parse_mode=None,
+            )
+            return
+
+        pipeline = get_pipeline()
+        daily_dfs: dict[str, pd.DataFrame] = {}
+        active_assets = [a for a in settings.assets if a.active]
+        for asset in active_assets:
+            try:
+                safety = await pipeline.get_analysis_ready_data(asset)
+                if safety.safe and safety.daily_df is not None:
+                    daily_dfs[asset.symbol] = safety.daily_df
+            except Exception:
+                pass
+
+        momentum = compute_5d_momentum(daily_dfs)
+        total_risk = portfolio.get_total_open_risk()
+
+        for candidate in candidates:
+            suggestion = generate_rebalance_suggestion(
+                candidate, momentum, total_risk, portfolio.balance_usd,
+            )
+            if suggestion:
+                if suggestion.buy_symbol in prices:
+                    suggestion.buy_price = prices[suggestion.buy_symbol]
+                msg = format_rebalance_message(suggestion)
+                await update.message.reply_text(msg, parse_mode="Markdown")
+
+                with get_session() as session:
+                    lifecycle = SignalLifecycle(session)
+                    asset = session.query(Asset).filter(
+                        Asset.symbol == candidate["symbol"]
+                    ).first()
+                    if asset:
+                        from datetime import timezone as tz
+                        from datetime import timedelta
+                        lifecycle.create_signal(
+                            asset_id=asset.id,
+                            signal_type="PARTIAL_REBALANCE_SELL",
+                            regime="EXPERIMENTAL",
+                            expires_at=datetime.now(tz.utc) + timedelta(hours=2),
+                            reason="Partial rebalance — 70% to stop-loss reached",
+                            entry_price=candidate["current_price"],
+                            position_size_usd=suggestion.sell_value_usd,
+                            explanation=EXPERIMENTAL_WARNING,
+                            priority="MEDIUM",
+                        )
+            else:
+                await update.message.reply_text(
+                    f"Position {candidate['symbol']} qualifies but no positive-momentum "
+                    f"alternative found among tracked assets.",
+                    parse_mode=None,
+                )
+
+    except Exception as e:
+        logger.error("cmd_rebalance_suggestion crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Rebalance error: {e}", parse_mode=None)
+        except Exception:
+            pass
+
+
 def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
@@ -830,5 +923,6 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("debug", cmd_debug))
     app.add_handler(CommandHandler("reset_challenge", cmd_reset_challenge))
     app.add_handler(CommandHandler("new_challenge", cmd_new_challenge))
+    app.add_handler(CommandHandler("rebalance_suggestion", cmd_rebalance_suggestion))
 
     return app

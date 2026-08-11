@@ -21,6 +21,7 @@ class SignalType(str, Enum):
     REDUCE = "REDUCE"
     TAKE_PROFIT = "TAKE_PROFIT"
     MOVE_TO_USD = "MOVE_TO_USD"
+    PARTIAL_REBALANCE_SELL = "PARTIAL_REBALANCE_SELL"
 
 
 class SignalStatus(str, Enum):

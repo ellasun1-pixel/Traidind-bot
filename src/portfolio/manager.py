@@ -179,6 +179,43 @@ class PaperPortfolio:
         self._update_challenge_status(prices or {})
         return True, f"Sold {symbol} @ ${exit_price:.2f}, P&L: ${total_pnl:.2f}"
 
+    def confirm_partial_sell(
+        self, symbol: str, exit_price: float, sell_pct: float,
+        signal_id: Optional[int] = None,
+        prices: Optional[dict[str, float]] = None,
+    ) -> tuple[bool, str]:
+        if sell_pct <= 0 or sell_pct > 0.30:
+            return False, f"Partial sell capped at 30% — requested {sell_pct*100:.0f}%"
+
+        open_pos = [p for p in self.positions if p.status == "open" and p.symbol == symbol]
+        if not open_pos:
+            return False, f"No open position for {symbol}"
+
+        pos = open_pos[0]
+        sell_qty = pos.quantity * sell_pct
+        proceeds = sell_qty * exit_price
+        exit_commission = (sell_qty * exit_price) * settings.commission_pct
+        raw_pnl = (exit_price - pos.entry_price) * sell_qty
+        realized_pnl = raw_pnl - (pos.commission_usd * sell_pct) - (pos.spread_cost_usd * sell_pct) - exit_commission
+
+        pos.quantity -= sell_qty
+        pos.position_value_usd *= (1 - sell_pct)
+        pos.commission_usd *= (1 - sell_pct)
+        pos.spread_cost_usd *= (1 - sell_pct)
+
+        self.balance_usd += proceeds
+        self.realized_pnl_total += realized_pnl
+        self._update_challenge_status(prices or {})
+
+        logger.info(
+            "PARTIAL_SELL confirmed: %s %.4f (%.0f%%) @ $%.2f, P&L=$%.2f",
+            symbol, sell_qty, sell_pct * 100, exit_price, realized_pnl,
+        )
+        return True, (
+            f"Sold {sell_pct*100:.0f}% of {symbol} ({sell_qty:.6f} units) "
+            f"@ ${exit_price:.2f}, P&L: ${realized_pnl:.2f}"
+        )
+
     def get_open_positions(self) -> list[dict]:
         return [p.to_dict() for p in self.positions if p.status == "open"]
 
