@@ -368,6 +368,129 @@ class HistoricalBacktester:
             return {}
 
 
+def format_trade_replay(
+    result: BacktestResult,
+    trade_id: int = 1,
+    context_days_before: int = 5,
+    context_days_after: int = 2,
+) -> str:
+    trade = None
+    for t in result.trades:
+        if t.trade_id == trade_id:
+            trade = t
+            break
+    if trade is None:
+        return f"Trade #{trade_id} not found in {len(result.trades)} trades."
+
+    lines: list[str] = []
+    lines.append("=" * 80)
+    lines.append(f"TRADE REPLAY — {trade.asset} — Trade #{trade.trade_id}")
+    lines.append("=" * 80)
+    lines.append("")
+
+    lines.append("ENTRY")
+    lines.append(f"  Signal date:     {trade.signal_date}")
+    lines.append(f"  Execution date:  {trade.execution_date}")
+    lines.append(f"  Regime:          {trade.regime}")
+    lines.append(f"  Entry price:     ${trade.entry_price:,.2f}")
+    lines.append(f"  Stop-loss:       ${trade.stop_loss:,.2f} "
+                 f"({(trade.entry_price - trade.stop_loss) / trade.entry_price * 100:.2f}% below entry)")
+    lines.append(f"  Take-profit:     ${trade.take_profit:,.2f} "
+                 f"({(trade.take_profit - trade.entry_price) / trade.entry_price * 100:.2f}% above entry)")
+    lines.append(f"  Position size:   ${trade.position_size_usd:,.2f}")
+    lines.append(f"  Max risk:        ${trade.max_risk_usd:,.2f}")
+    lines.append("")
+
+    if trade.indicators:
+        lines.append("INDICATORS AT SIGNAL")
+        for k, v in sorted(trade.indicators.items()):
+            if k in ("ema50", "ema200"):
+                lines.append(f"  {k:12s}  ${v:,.2f}")
+            else:
+                lines.append(f"  {k:12s}  {v:.4f}")
+        close_val = trade.entry_price
+        ema200_val = trade.indicators.get("ema200", 0)
+        ema50_val = trade.indicators.get("ema50", 0)
+        er20_val = trade.indicators.get("er20", 0)
+        lines.append("")
+        lines.append("TREND CHECK")
+        lines.append(f"  ER20 >= 0.35?       {'YES' if er20_val >= 0.35 else 'NO':4s}  (ER20 = {er20_val:.4f})")
+        lines.append(f"  Close > EMA200?     {'YES' if close_val > ema200_val else 'NO':4s}  "
+                     f"(${close_val:,.2f} vs ${ema200_val:,.2f})")
+        lines.append(f"  EMA50 > EMA200?     {'YES' if ema50_val > ema200_val else 'NO':4s}  "
+                     f"(${ema50_val:,.2f} vs ${ema200_val:,.2f})")
+        lines.append("")
+
+    lines.append("EXIT")
+    lines.append(f"  Exit date:       {trade.exit_date}")
+    lines.append(f"  Exit price:      ${trade.exit_price:,.2f}" if trade.exit_price else "  Exit price:      N/A")
+    lines.append(f"  Exit reason:     {trade.exit_reason}")
+    lines.append(f"  Holding days:    {trade.holding_days}")
+    lines.append(f"  P&L:             ${trade.pnl:+,.2f}")
+    pnl_pct = (trade.pnl / trade.position_size_usd * 100) if trade.position_size_usd else 0
+    lines.append(f"  Return:          {pnl_pct:+.2f}%")
+    lines.append(f"  MFE (max favor): {trade.mfe:+.2%}")
+    lines.append(f"  MAE (max adv):   {trade.mae:+.2%}")
+    lines.append("")
+
+    signal_idx = None
+    exit_idx = None
+    for i, ds in enumerate(result.equity_curve):
+        if ds.date == trade.signal_date and signal_idx is None:
+            signal_idx = i
+        if trade.exit_date and ds.date == trade.exit_date:
+            exit_idx = i
+
+    if signal_idx is not None:
+        start = max(0, signal_idx - context_days_before)
+        end_idx = exit_idx if exit_idx is not None else signal_idx
+        end = min(len(result.equity_curve), end_idx + context_days_after + 1)
+
+        lines.append("DAY-BY-DAY EQUITY LOG")
+        lines.append("-" * 80)
+        lines.append(f"{'Date':<12} {'Equity':>10} {'Cash':>10} {'Unreal P&L':>12} "
+                     f"{'Positions':>10} {'Regime':<8} {'Note'}")
+        lines.append("-" * 80)
+
+        for i in range(start, end):
+            ds = result.equity_curve[i]
+            note = ""
+            if ds.date == trade.signal_date:
+                note = "<-- SIGNAL (BUY)"
+            elif ds.date == trade.execution_date:
+                note = "<-- EXECUTION"
+            elif trade.exit_date and ds.date == trade.exit_date:
+                note = f"<-- EXIT ({trade.exit_reason})"
+            lines.append(
+                f"{ds.date:<12} ${ds.equity:>9,.2f} ${ds.cash:>9,.2f} "
+                f"${ds.unrealized_pnl:>+10,.2f}  {ds.open_positions:>9d} "
+                f"{ds.regime or '':.<8s} {note}"
+            )
+        lines.append("-" * 80)
+
+    lines.append("")
+    lines.append("SIGNAL FUNNEL (around trade)")
+    lines.append("-" * 70)
+    lines.append(f"{'Date':<12} {'Regime':<10} {'Signal':<15} {'Reason'}")
+    lines.append("-" * 70)
+
+    pre_entries = [e for e in result.signal_funnel if e.date < trade.signal_date]
+    for entry in pre_entries[-context_days_before:]:
+        lines.append(f"{entry.date:<12} {entry.regime:<10} "
+                     f"{entry.signal_type:<15} {entry.reason[:50]}")
+
+    for entry in result.signal_funnel:
+        if trade.signal_date and trade.exit_date:
+            if trade.signal_date <= entry.date <= trade.exit_date:
+                marker = " ***" if entry.signal_type == "BUY" else ""
+                lines.append(f"{entry.date:<12} {entry.regime:<10} "
+                             f"{entry.signal_type:<15} {entry.reason[:50]}{marker}")
+
+    lines.append("-" * 70)
+    lines.append("")
+    return "\n".join(lines)
+
+
 def run_multi_asset(
     assets_data: dict[str, pd.DataFrame],
     strategy: str = "conservative",
