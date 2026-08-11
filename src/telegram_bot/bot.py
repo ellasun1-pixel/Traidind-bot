@@ -548,6 +548,10 @@ ASSET_ALIASES = {
     "BTC": "BTC/USD", "ETH": "ETH/USD", "XRP": "XRP/USD",
     "LINK": "LINK/USD", "LTC": "LTC/USD", "SOL": "SOL/USD",
     "DOGE": "DOGE/USD", "AVAX": "AVAX/USD", "DOT": "DOT/USD",
+    "ADA": "ADA/USD", "TRX": "TRX/USD", "SUI": "SUI/USD",
+    "NEAR": "NEAR/USD", "ATOM": "ATOM/USD", "UNI": "UNI/USD",
+    "AAVE": "AAVE/USD", "OP": "OP/USD", "HBAR": "HBAR/USD",
+    "ETC": "ETC/USD", "ARB": "ARB/USD",
 }
 
 

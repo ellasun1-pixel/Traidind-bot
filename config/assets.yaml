@@ -44,6 +44,61 @@ assets:
     coinbase_pair: "DOT-USD"
     active: true
 
+  - symbol: "ADA/USD"
+    kraken_pair: "ADAUSD"
+    coinbase_pair: "ADA-USD"
+    active: true
+
+  - symbol: "TRX/USD"
+    kraken_pair: "TRXUSD"
+    coinbase_pair: "TRX-USD"
+    active: true
+
+  - symbol: "SUI/USD"
+    kraken_pair: "SUIUSD"
+    coinbase_pair: "SUI-USD"
+    active: true
+
+  - symbol: "NEAR/USD"
+    kraken_pair: "NEARUSD"
+    coinbase_pair: "NEAR-USD"
+    active: true
+
+  - symbol: "ATOM/USD"
+    kraken_pair: "ATOMUSD"
+    coinbase_pair: "ATOM-USD"
+    active: true
+
+  - symbol: "UNI/USD"
+    kraken_pair: "UNIUSD"
+    coinbase_pair: "UNI-USD"
+    active: true
+
+  - symbol: "AAVE/USD"
+    kraken_pair: "AAVEUSD"
+    coinbase_pair: "AAVE-USD"
+    active: true
+
+  - symbol: "OP/USD"
+    kraken_pair: "OPUSD"
+    coinbase_pair: "OP-USD"
+    active: true
+
+  - symbol: "HBAR/USD"
+    kraken_pair: "HBARUSD"
+    coinbase_pair: "HBAR-USD"
+    active: true
+
+  - symbol: "ETC/USD"
+    kraken_pair: "XETCZUSD"
+    coinbase_pair: "ETC-USD"
+    active: true
+
+  - symbol: "ARB/USD"
+    kraken_pair: "ARBUSD"
+    coinbase_pair: "ARB-USD"
+    active: true
+
 settings:
   starting_balance: 1000.0
   win_level: 1120.0
