@@ -402,6 +402,76 @@ async def test_cmd_debug_error_handling(mock_update, mock_context):
 
 
 @pytest.mark.asyncio
+async def test_debug_asset_plain_text_no_markdown():
+    """_debug_asset produces plain text (no Markdown) so field names with
+    underscores (rvol_pct25, price_change_48h) never crash Telegram's parser."""
+    from src.telegram_bot.bot import _debug_asset
+
+    mock_pipeline = MagicMock()
+    mock_safety = MagicMock()
+    mock_safety.safe = False
+    mock_safety.provider_used = "kraken_adapter"
+    mock_safety.reason = "rate_limit_exceeded"
+    mock_pipeline.get_analysis_ready_data = AsyncMock(return_value=mock_safety)
+
+    mock_asset = MagicMock()
+    mock_asset.symbol = "HYPE/USD"
+
+    text = await _debug_asset(mock_pipeline, mock_asset)
+
+    assert "*" not in text, "Plain-text output must not contain Markdown bold markers"
+    assert "HYPE/USD" in text
+    assert "kraken_adapter" in text
+
+
+@pytest.mark.asyncio
+async def test_debug_asset_plain_text_with_nan_fields():
+    """When indicators have NaN values, field names like rvol_pct25 appear
+    in plain text without Markdown formatting — no crash risk."""
+    import numpy as np
+    import pandas as pd
+    from src.telegram_bot.bot import _debug_asset
+
+    n = 50
+    dates = pd.date_range("2025-01-01", periods=n, freq="1D")
+    df = pd.DataFrame({
+        "open_time": dates,
+        "open": np.full(n, 100.0),
+        "high": np.full(n, 105.0),
+        "low": np.full(n, 95.0),
+        "close": np.full(n, 100.0),
+        "volume": np.full(n, 1000.0),
+    })
+
+    mock_safety = MagicMock()
+    mock_safety.safe = True
+    mock_safety.provider_used = "coinbase"
+    mock_safety.current_price = 30.0
+    mock_safety.daily_df = df
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.get_analysis_ready_data = AsyncMock(return_value=mock_safety)
+
+    mock_asset = MagicMock()
+    mock_asset.symbol = "HYPE/USD"
+
+    with patch("src.telegram_bot.bot.get_portfolio") as mock_gp, \
+         patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock, return_value={}):
+        mock_portfolio = MagicMock()
+        mock_portfolio.get_total_equity.return_value = 1000.0
+        mock_portfolio.get_open_positions.return_value = []
+        mock_portfolio.get_total_open_risk.return_value = 0.0
+        mock_gp.return_value = mock_portfolio
+
+        text = await _debug_asset(mock_pipeline, mock_asset)
+
+    assert "━" in text, "Plain-text output should use ━ section separators"
+    assert "*" not in text, "Plain-text output must not contain Markdown bold markers"
+    assert "HYPE/USD" in text
+    assert "rvol_pct25" in text or "DATA_INSUFFICIENT" in text
+
+
+@pytest.mark.asyncio
 async def test_cmd_reset_challenge_error_handling(mock_update, mock_context):
     with patch("src.telegram_bot.bot.get_portfolio", side_effect=RuntimeError("crash")):
         await cmd_reset_challenge(mock_update, mock_context)

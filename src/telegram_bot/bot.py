@@ -593,7 +593,7 @@ async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         for asset in targets:
             text = await _debug_asset(pipeline, asset)
-            await update.message.reply_text(text, parse_mode="Markdown")
+            await update.message.reply_text(text, parse_mode=None)
     except Exception as e:
         logger.error("cmd_debug crashed: %s", e, exc_info=True)
         try:
@@ -605,7 +605,7 @@ async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _debug_asset(pipeline, asset) -> str:
     import numpy as np
 
-    lines = [f"\U0001f50d *{asset.symbol}*", ""]
+    lines = [f"\U0001f50d {asset.symbol}", ""]
 
     safety = await pipeline.get_analysis_ready_data(asset)
 
@@ -625,10 +625,10 @@ async def _debug_asset(pipeline, asset) -> str:
     latest = enriched.iloc[-1]
     prev = enriched.iloc[-2] if len(enriched) > 1 else latest
 
-    first_ts = enriched.iloc[0].get("open_time", "?")
-    last_ts = enriched.iloc[-1].get("open_time", "?")
+    first_ts = str(enriched.iloc[0].get("open_time", "?"))
+    last_ts = str(enriched.iloc[-1].get("open_time", "?"))
 
-    lines.append("*Data Quality*")
+    lines.append("━ Data Quality")
     lines.append(f"Candles: {n_candles}")
     lines.append(f"First: {first_ts}")
     lines.append(f"Last:  {last_ts}")
@@ -680,7 +680,7 @@ async def _debug_asset(pipeline, asset) -> str:
     prev_ema50_v = prev.get("ema50")
     prev_ema50 = float(prev_ema50_v) if prev_ema50_v is not None and not (isinstance(prev_ema50_v, float) and np.isnan(prev_ema50_v)) else 0.0
 
-    lines.append("*Indicators*")
+    lines.append("━ Indicators")
     lines.append(f"EMA50: {ema50 if ema50 == 'NaN' else f'{ema50:,.2f}'}")
     lines.append(f"EMA200: {ema200 if ema200 == 'NaN' else f'{ema200:,.2f}'}")
     lines.append(f"ER20: {er20 if er20 == 'NaN' else f'{er20:.4f}'}")
@@ -694,10 +694,10 @@ async def _debug_asset(pipeline, asset) -> str:
     regime = classify_regime(latest)
 
     if regime == MarketRegime.DATA_INSUFFICIENT:
-        lines.append(f"*Regime: {_esc(regime.value)}*")
+        lines.append(f"━ Regime: {regime.value}")
         lines.append(f"Cannot classify — NaN in: {', '.join(nan_fields)}")
         lines.append("")
-        lines.append("*Signal: NO\\_TRADE*")
+        lines.append("━ Signal: NO_TRADE")
         lines.append("Reason: Data insufficient for regime classification")
         return "\n".join(lines)
 
@@ -710,21 +710,21 @@ async def _debug_asset(pipeline, asset) -> str:
     ema50_f = float(ema50)
     ema200_f = float(ema200)
 
-    lines.append("*PANIC conditions*")
+    lines.append("━ PANIC conditions")
     c_panic_drop = p48h_f <= -0.10
     c_panic_vol = rvol_median_f > 0 and rvol_f > 1.8 * rvol_median_f
     lines.append(f"  48h drop ≤ -10%    {check(c_panic_drop)}  ({p48h_f:+.2%})")
     lines.append(f"  RVol > 1.8×median  {check(c_panic_vol)}  ({rvol_f:.4f} vs {1.8*rvol_median_f:.4f})")
     lines.append("")
 
-    lines.append("*LOWVOL conditions*")
+    lines.append("━ LOWVOL conditions")
     c_lv_vol = rvol_pct25_f > 0 and rvol_f <= rvol_pct25_f
     c_lv_er = er20_f < 0.35
     lines.append(f"  RVol ≤ pct25       {check(c_lv_vol)}  ({rvol_f:.4f} vs {rvol_pct25_f:.4f})")
     lines.append(f"  ER20 < 0.35        {check(c_lv_er)}  ({er20_f:.4f})")
     lines.append("")
 
-    lines.append("*TREND conditions*")
+    lines.append("━ TREND conditions")
     c_tr_er = er20_f >= 0.35
     c_tr_price = close > ema200_f
     c_tr_ema = ema50_f > ema200_f
@@ -733,7 +733,7 @@ async def _debug_asset(pipeline, asset) -> str:
     lines.append(f"  EMA50 > EMA200     {check(c_tr_ema)}  ({ema50_f:,.2f} vs {ema200_f:,.2f})")
     lines.append("")
 
-    lines.append(f"*Regime: {_esc(regime.value)}*")
+    lines.append(f"━ Regime: {regime.value}")
 
     if regime == MarketRegime.CHOP:
         failing = []
@@ -746,7 +746,7 @@ async def _debug_asset(pipeline, asset) -> str:
         lines.append(f"TREND blocked by: {', '.join(failing)}")
 
     lines.append("")
-    lines.append("*BUY gate checks*")
+    lines.append("━ BUY gate checks")
     portfolio = get_portfolio()
     prices = await get_live_prices()
     equity = portfolio.get_total_equity(prices)
@@ -773,8 +773,8 @@ async def _debug_asset(pipeline, asset) -> str:
         equity, open_pos, portfolio.get_total_open_risk(),
     )
     lines.append("")
-    lines.append(f"*Signal: {_esc(signal.signal_type)}*")
-    lines.append(f"Reason: {_esc(signal.reason)}")
+    lines.append(f"━ Signal: {signal.signal_type}")
+    lines.append(f"Reason: {signal.reason}")
 
     return "\n".join(lines)
 
