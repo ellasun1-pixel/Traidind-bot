@@ -566,6 +566,9 @@ ASSET_ALIASES = {
     "ALGO": "ALGO/USD", "INJ": "INJ/USD", "RENDER": "RENDER/USD",
     "STX": "STX/USD", "LDO": "LDO/USD", "CRV": "CRV/USD",
     "ZEC": "ZEC/USD", "ONDO": "ONDO/USD",
+    "JTO": "JTO/USD", "TIA": "TIA/USD", "WLD": "WLD/USD",
+    "TAO": "TAO/USD", "JUP": "JUP/USD", "HYPE": "HYPE/USD",
+    "GRASS": "GRASS/USD",
 }
 
 

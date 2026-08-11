@@ -154,6 +154,41 @@ assets:
     coinbase_pair: "ONDO-USD"
     active: true
 
+  - symbol: "JTO/USD"
+    kraken_pair: "JTOUSD"
+    coinbase_pair: "JTO-USD"
+    active: true
+
+  - symbol: "TIA/USD"
+    kraken_pair: "TIAUSD"
+    coinbase_pair: "TIA-USD"
+    active: true
+
+  - symbol: "WLD/USD"
+    kraken_pair: "WLDUSD"
+    coinbase_pair: "WLD-USD"
+    active: true
+
+  - symbol: "TAO/USD"
+    kraken_pair: "TAOUSD"
+    coinbase_pair: "TAO-USD"
+    active: true
+
+  - symbol: "JUP/USD"
+    kraken_pair: "JUPUSD"
+    coinbase_pair: "JUP-USD"
+    active: true
+
+  - symbol: "HYPE/USD"
+    kraken_pair: "HYPEUSD"
+    coinbase_pair: "HYPE-USD"
+    active: true
+
+  - symbol: "GRASS/USD"
+    kraken_pair: "GRASSUSD"
+    coinbase_pair: "GRASS-USD"
+    active: true
+
 settings:
   starting_balance: 1000.0
   win_level: 1120.0
