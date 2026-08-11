@@ -378,7 +378,7 @@ async def market_check_job():
             })
             errors.append(f"{asset.symbol}: {e}")
         if i < len(active_assets) - 1:
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(3.0)
 
     duration_ms = int((time.monotonic() - start_time) * 1000)
 
