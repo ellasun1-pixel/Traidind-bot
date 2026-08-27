@@ -14,13 +14,14 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
+from src.config import settings
 from src.strategy.indicators import compute_indicators
 
 logger = logging.getLogger(__name__)
 
-WIN_LEVEL = 1120.0
-LOSS_LEVEL = 950.0
-STARTING_BALANCE = 1000.0
+WIN_LEVEL = settings.win_level
+LOSS_LEVEL = settings.loss_level
+STARTING_BALANCE = settings.starting_balance
 
 
 class StrategyLike(Protocol):

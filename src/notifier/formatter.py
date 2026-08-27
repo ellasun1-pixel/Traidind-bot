@@ -89,8 +89,8 @@ class SignalFormatter:
 
         lines.append("")
         lines.append(f"Equity: ${signal.current_balance:.2f}")
-        lines.append(f"To win ($1120): ${signal.distance_to_win:.2f}")
-        lines.append(f"To defeat ($950): ${signal.distance_to_loss:.2f}")
+        lines.append(f"To win (${settings.win_level:.0f}): ${signal.distance_to_win:.2f}")
+        lines.append(f"To defeat (${settings.loss_level:.0f}): ${signal.distance_to_loss:.2f}")
         if signal.remaining_usd:
             lines.append(f"Cash after trade: ${signal.remaining_usd:.2f}")
 

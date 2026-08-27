@@ -137,21 +137,23 @@ class StrategyEngine:
                 distance_to_loss=balance - settings.loss_level,
             )
 
-        if balance < 965:
+        move_to_usd_level = settings.loss_level + 15
+        if balance < move_to_usd_level:
             return TradeSignal(
                 signal_type="MOVE_TO_USD",
                 priority="CRITICAL",
                 asset_symbol=symbol,
                 regime=regime,
                 entry_price=current_price,
-                reason="Balance below $965 — move to USD recommended",
+                reason=f"Balance below ${move_to_usd_level:.0f} — move to USD recommended",
                 explanation="Strongly recommended to go fully to cash to avoid defeat",
                 current_balance=balance,
                 distance_to_win=settings.win_level - balance,
                 distance_to_loss=balance - settings.loss_level,
             )
 
-        if balance < 975:
+        no_buy_level = settings.loss_level + 25
+        if balance < no_buy_level:
             return TradeSignal(
                 signal_type="SELL",
                 priority="CRITICAL",
@@ -159,7 +161,7 @@ class StrategyEngine:
                 regime=regime,
                 entry_price=current_price,
                 reason="Balance dangerously close to loss level — exit all risk",
-                explanation="Your balance is near $950 defeat — sell to protect remaining capital",
+                explanation=f"Your balance is near ${settings.loss_level:.0f} defeat — sell to protect remaining capital",
                 current_balance=balance,
                 distance_to_win=settings.win_level - balance,
                 distance_to_loss=balance - settings.loss_level,
@@ -230,11 +232,14 @@ class StrategyEngine:
         if regime == MarketRegime.PANIC:
             return None
 
-        if balance >= 1110:
+        preserve_level = settings.win_level - 10
+        critical_level = settings.loss_level + 5
+        no_buy_level = settings.loss_level + 25
+        if balance >= preserve_level:
             return None
-        if balance <= 955:
+        if balance <= critical_level:
             return None
-        if balance < 975:
+        if balance < no_buy_level:
             return None
 
         if not self._is_closed_candle_confirmation(latest, prev):
@@ -271,7 +276,9 @@ class StrategyEngine:
         position_value = risk_dollars / stop_distance_pct
         stop_loss_price = current_price * (1 - stop_distance_pct)
 
-        if balance >= 1090:
+        near_win_level = settings.win_level - 30
+        mid_level = settings.starting_balance + 50
+        if balance >= near_win_level:
             if regime != MarketRegime.TREND:
                 return None
             er20 = latest.get("er20", 0) or 0
@@ -280,7 +287,7 @@ class StrategyEngine:
                 return None
             position_value = min(position_value, balance * 0.10)
 
-        if balance < 1050:
+        if balance < mid_level:
             max_invested = balance * 0.50
             position_value = min(position_value, max_invested)
 

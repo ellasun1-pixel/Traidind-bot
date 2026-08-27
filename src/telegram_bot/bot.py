@@ -754,14 +754,16 @@ async def _debug_asset(pipeline, asset) -> str:
     existing = [p for p in open_pos if p.get("symbol") == asset.symbol]
 
     c_not_panic = regime != MarketRegime.PANIC
-    c_balance_ok = 955 < equity < 1110
+    critical_level = settings.loss_level + 5
+    preserve_level = settings.win_level - 10
+    c_balance_ok = critical_level < equity < preserve_level
     c_above_ema200 = safety.current_price > ema200_f if ema200_f > 0 else False
     c_candle_conf = prev_close > prev_ema50 if prev_close and prev_ema50 else False
     c_no_spike = abs(p_short_f) <= 0.08
     c_max_pos = len([p for p in open_pos if p.get("status") == "open"]) < settings.max_open_positions
 
     lines.append(f"  Not PANIC          {check(c_not_panic)}")
-    lines.append(f"  Equity 955-1110    {check(c_balance_ok)}  (${equity:.2f})")
+    lines.append(f"  Equity {critical_level:.0f}-{preserve_level:.0f}    {check(c_balance_ok)}  (${equity:.2f})")
     lines.append(f"  Price > EMA200     {check(c_above_ema200)}")
     lines.append(f"  Candle confirm     {check(c_candle_conf)}  (prev close {prev_close:,.2f} vs prev EMA50 {prev_ema50:,.2f})")
     lines.append(f"  No spike (≤8%)     {check(c_no_spike)}  ({p_short_f:+.2%})")

@@ -27,15 +27,16 @@ from typing import Optional
 
 import pandas as pd
 
+from src.config import settings
 from src.strategy.indicators import compute_indicators
 from src.strategy.regime import classify_regime, MarketRegime
 from src.strategy.engine import TradeSignal
 
 logger = logging.getLogger(__name__)
 
-WIN_LEVEL = 1120.0
-LOSS_LEVEL = 950.0
-STARTING_BALANCE = 1000.0
+WIN_LEVEL = settings.win_level
+LOSS_LEVEL = settings.loss_level
+STARTING_BALANCE = settings.starting_balance
 
 
 @dataclass
@@ -122,7 +123,7 @@ class ChallengeStrategyEngine:
                 distance_to_loss=balance - LOSS_LEVEL,
             )
 
-        if balance < 965:
+        if balance < LOSS_LEVEL + 15:
             return TradeSignal(
                 signal_type="SELL", priority="CRITICAL",
                 asset_symbol=symbol, regime=regime, entry_price=price,
@@ -174,9 +175,9 @@ class ChallengeStrategyEngine:
     ) -> Optional[TradeSignal]:
         if regime == MarketRegime.PANIC:
             return None
-        if balance >= 1115:
+        if balance >= WIN_LEVEL - 5:
             return None
-        if balance <= 955:
+        if balance <= LOSS_LEVEL + 5:
             return None
 
         ema200 = float(latest.get("ema200", 0) or 0)
@@ -213,7 +214,7 @@ class ChallengeStrategyEngine:
         if not (is_trend or is_chop_tradeable):
             return None
 
-        if balance >= 1090:
+        if balance >= WIN_LEVEL - 30:
             risk_pct = self.cfg.risk_per_trade_pct_cautious
             stop_distance_pct = 0.02
         elif is_trend:
@@ -231,7 +232,7 @@ class ChallengeStrategyEngine:
         position_value = risk_dollars / stop_distance_pct
         stop_loss_price = price * (1 - stop_distance_pct)
 
-        if balance < 1050:
+        if balance < STARTING_BALANCE + 50:
             position_value = min(position_value, balance * 0.60)
 
         return TradeSignal(
