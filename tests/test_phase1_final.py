@@ -562,6 +562,7 @@ class TestCommandRegistration:
                 "history", "confirm", "reject", "pause", "resume",
                 "settings", "auth", "scheduler", "health", "debug",
                 "reset_challenge", "new_challenge", "rebalance_suggestion",
+                "manual_buy", "manual_sell",
             }
             assert expected == commands, f"Missing: {expected - commands}, Extra: {commands - expected}"
 
