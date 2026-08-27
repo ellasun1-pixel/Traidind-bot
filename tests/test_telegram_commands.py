@@ -7,6 +7,7 @@ from src.telegram_bot.bot import (
     cmd_pause, cmd_resume, cmd_settings, cmd_auth,
     cmd_scheduler, cmd_health, cmd_debug,
     cmd_reset_challenge, cmd_new_challenge,
+    cmd_manual_buy, cmd_manual_sell, _normalize_symbol,
 )
 from src.config import settings, AgentMode
 
@@ -707,3 +708,210 @@ async def test_cmd_status_inmemory_overrides_db_for_same_asset(mock_update, mock
     text = mock_update.message.reply_text.call_args[0][0]
     assert "NO\\_TRADE" in text or "NO_TRADE" in text, \
         "In-memory signal (NO_TRADE) should override stale DB signal (BUY)"
+
+
+# --- _normalize_symbol tests ---
+
+def test_normalize_symbol_plain_ticker():
+    assert _normalize_symbol("BTC") == "BTC/USD"
+
+def test_normalize_symbol_lowercase():
+    assert _normalize_symbol("eth") == "ETH/USD"
+
+def test_normalize_symbol_brackets():
+    assert _normalize_symbol("[BTC]") == "BTC/USD"
+
+def test_normalize_symbol_already_pair():
+    assert _normalize_symbol("BTC/USD") == "BTC/USD"
+
+def test_normalize_symbol_empty():
+    assert _normalize_symbol("") is None
+
+def test_normalize_symbol_whitespace():
+    assert _normalize_symbol("  sol  ") == "SOL/USD"
+
+
+# --- /manual_buy tests ---
+
+@pytest.mark.asyncio
+async def test_manual_buy_no_args(mock_update, mock_context):
+    mock_context.args = []
+    await cmd_manual_buy(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Usage" in text
+
+
+@pytest.mark.asyncio
+async def test_manual_buy_invalid_amount(mock_update, mock_context):
+    mock_context.args = ["BTC", "abc"]
+    await cmd_manual_buy(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "not a valid number" in text
+
+
+@pytest.mark.asyncio
+async def test_manual_buy_negative_amount(mock_update, mock_context):
+    mock_context.args = ["BTC", "-100"]
+    await cmd_manual_buy(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "positive" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_manual_buy_unknown_asset(mock_update, mock_context):
+    mock_context.args = ["ZZZZZ", "200"]
+    await cmd_manual_buy(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Unknown asset" in text
+
+
+@pytest.mark.asyncio
+async def test_manual_buy_price_unavailable(mock_update, mock_context):
+    mock_context.args = ["BTC", "200"]
+    with patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock, return_value={}):
+        await cmd_manual_buy(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Could not fetch" in text
+
+
+@pytest.mark.asyncio
+async def test_manual_buy_success(mock_update, mock_context):
+    mock_context.args = ["BTC", "200"]
+    mock_portfolio = MagicMock()
+    mock_portfolio.confirm_buy.return_value = (True, "Bought 0.002 BTC/USD @ $100000.00")
+
+    with patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock,
+               return_value={"BTC/USD": 100000.0}), \
+         patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
+         patch("src.telegram_bot.bot.get_session") as mock_gs, \
+         patch("src.telegram_bot.bot.record_portfolio_snapshot"):
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+        await cmd_manual_buy(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Done" in text
+    mock_portfolio.confirm_buy.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_manual_buy_portfolio_rejects(mock_update, mock_context):
+    mock_context.args = ["BTC", "200"]
+    mock_portfolio = MagicMock()
+    mock_portfolio.confirm_buy.return_value = (False, "Insufficient balance")
+
+    with patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock,
+               return_value={"BTC/USD": 100000.0}), \
+         patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio):
+        await cmd_manual_buy(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Failed" in text
+
+
+@pytest.mark.asyncio
+async def test_manual_buy_bracket_ticker(mock_update, mock_context):
+    mock_context.args = ["[BTC]", "[200]"]
+    mock_portfolio = MagicMock()
+    mock_portfolio.confirm_buy.return_value = (True, "OK")
+
+    with patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock,
+               return_value={"BTC/USD": 100000.0}), \
+         patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
+         patch("src.telegram_bot.bot.get_session") as mock_gs, \
+         patch("src.telegram_bot.bot.record_portfolio_snapshot"):
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+        await cmd_manual_buy(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Done" in text
+
+
+# --- /manual_sell tests ---
+
+@pytest.mark.asyncio
+async def test_manual_sell_no_args(mock_update, mock_context):
+    mock_context.args = []
+    await cmd_manual_sell(mock_update, mock_context)
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Usage" in text
+
+
+@pytest.mark.asyncio
+async def test_manual_sell_no_open_position(mock_update, mock_context):
+    mock_context.args = ["BTC"]
+    mock_portfolio = MagicMock()
+    mock_portfolio.positions = []
+
+    with patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio):
+        await cmd_manual_sell(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "No open position" in text
+
+
+@pytest.mark.asyncio
+async def test_manual_sell_price_unavailable(mock_update, mock_context):
+    mock_context.args = ["BTC"]
+    mock_pos = MagicMock()
+    mock_pos.status = "open"
+    mock_pos.symbol = "BTC/USD"
+    mock_portfolio = MagicMock()
+    mock_portfolio.positions = [mock_pos]
+
+    with patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
+         patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock, return_value={}):
+        await cmd_manual_sell(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Could not fetch" in text
+
+
+@pytest.mark.asyncio
+async def test_manual_sell_success(mock_update, mock_context):
+    mock_context.args = ["BTC"]
+    mock_pos = MagicMock()
+    mock_pos.status = "open"
+    mock_pos.symbol = "BTC/USD"
+    mock_portfolio = MagicMock()
+    mock_portfolio.positions = [mock_pos]
+    mock_portfolio.confirm_sell.return_value = (True, "Sold BTC/USD @ $101000.00")
+
+    with patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
+         patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock,
+               return_value={"BTC/USD": 101000.0}), \
+         patch("src.telegram_bot.bot.get_session") as mock_gs, \
+         patch("src.telegram_bot.bot.record_portfolio_snapshot"):
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+        await cmd_manual_sell(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Done" in text
+    mock_portfolio.confirm_sell.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_manual_sell_portfolio_rejects(mock_update, mock_context):
+    mock_context.args = ["BTC"]
+    mock_pos = MagicMock()
+    mock_pos.status = "open"
+    mock_pos.symbol = "BTC/USD"
+    mock_portfolio = MagicMock()
+    mock_portfolio.positions = [mock_pos]
+    mock_portfolio.confirm_sell.return_value = (False, "Position already closing")
+
+    with patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
+         patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock,
+               return_value={"BTC/USD": 101000.0}):
+        await cmd_manual_sell(mock_update, mock_context)
+
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Failed" in text

@@ -66,6 +66,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/scheduler — Job execution status\n"
         "/health — Operational health dashboard\n"
         "/debug — Regime diagnostics (all or /debug BTC)\n"
+        "/manual\\_buy TICKER AMOUNT — Record a buy already made in Kraken\n"
+        "/manual\\_sell TICKER — Record a sell at current market price\n"
         "/new\\_challenge — Reset and start a new paper challenge\n"
         "/help — Show this message"
     )
@@ -906,6 +908,172 @@ async def cmd_rebalance_suggestion(update: Update, context: ContextTypes.DEFAULT
             pass
 
 
+def _normalize_symbol(raw: str) -> str | None:
+    cleaned = raw.strip().strip("[]").upper()
+    if not cleaned:
+        return None
+    if "/" in cleaned:
+        return cleaned
+    return f"{cleaned}/USD"
+
+
+@owner_only
+async def cmd_manual_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        args = context.args or []
+        if len(args) != 2:
+            await update.message.reply_text(
+                "Usage: /manual_buy TICKER AMOUNT\n"
+                "Example: /manual_buy BTC 200\n\n"
+                "Records a buy you already made in Kraken.",
+                parse_mode=None,
+            )
+            return
+
+        symbol = _normalize_symbol(args[0])
+        if not symbol:
+            await update.message.reply_text(
+                "Could not parse ticker. Use: /manual_buy BTC 200 (no brackets)",
+                parse_mode=None,
+            )
+            return
+
+        raw_amount = args[1].strip().strip("[]")
+        try:
+            amount = float(raw_amount)
+        except ValueError:
+            await update.message.reply_text(
+                f"'{args[1]}' is not a valid number. Use: /manual_buy BTC 200",
+                parse_mode=None,
+            )
+            return
+
+        if amount <= 0:
+            await update.message.reply_text("Amount must be positive.", parse_mode=None)
+            return
+
+        asset_cfg = next((a for a in settings.assets if a.symbol == symbol), None)
+        if not asset_cfg:
+            known = ", ".join(a.symbol.split("/")[0] for a in settings.assets[:10])
+            await update.message.reply_text(
+                f"Unknown asset '{symbol}'. Known tickers: {known}...",
+                parse_mode=None,
+            )
+            return
+
+        prices = await get_live_prices([symbol])
+        if symbol not in prices:
+            await update.message.reply_text(
+                f"Could not fetch live price for {symbol}. Try again in a minute.",
+                parse_mode=None,
+            )
+            return
+
+        price = prices[symbol]
+        stop_loss_pct = float(asset_cfg.stop_loss_pct) if hasattr(asset_cfg, "stop_loss_pct") else 0.03
+        stop_loss = price * (1 - stop_loss_pct)
+        risk_dollars = amount * stop_loss_pct
+
+        portfolio = get_portfolio()
+        ok, msg = portfolio.confirm_buy(
+            symbol=symbol,
+            entry_price=price,
+            position_value_usd=amount,
+            stop_loss=stop_loss,
+            risk_dollars=risk_dollars,
+            prices=prices,
+        )
+
+        if ok:
+            with get_session() as session:
+                session.add(AuditLog(
+                    action="manual_buy",
+                    actor=str(update.effective_user.id),
+                    detail={"symbol": symbol, "amount": amount, "price": price},
+                ))
+            record_portfolio_snapshot("manual_buy", prices)
+
+        await update.message.reply_text(
+            f"{'Done' if ok else 'Failed'}: {msg}\n"
+            f"Price: ${price:,.2f} | Stop: ${stop_loss:,.2f}",
+            parse_mode=None,
+        )
+
+    except Exception as e:
+        logger.error("cmd_manual_buy crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Error: {e}", parse_mode=None)
+        except Exception:
+            pass
+
+
+@owner_only
+async def cmd_manual_sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        args = context.args or []
+        if len(args) != 1:
+            await update.message.reply_text(
+                "Usage: /manual_sell TICKER\n"
+                "Example: /manual_sell BTC\n\n"
+                "Records a sell you already made in Kraken at current market price.",
+                parse_mode=None,
+            )
+            return
+
+        symbol = _normalize_symbol(args[0])
+        if not symbol:
+            await update.message.reply_text(
+                "Could not parse ticker. Use: /manual_sell BTC (no brackets)",
+                parse_mode=None,
+            )
+            return
+
+        portfolio = get_portfolio()
+        open_pos = [p for p in portfolio.positions if p.status == "open" and p.symbol == symbol]
+        if not open_pos:
+            await update.message.reply_text(
+                f"No open position for {symbol}. Nothing to sell.",
+                parse_mode=None,
+            )
+            return
+
+        prices = await get_live_prices([symbol])
+        if symbol not in prices:
+            await update.message.reply_text(
+                f"Could not fetch live price for {symbol}. Try again in a minute.",
+                parse_mode=None,
+            )
+            return
+
+        price = prices[symbol]
+        ok, msg = portfolio.confirm_sell(
+            symbol=symbol,
+            exit_price=price,
+            prices=prices,
+        )
+
+        if ok:
+            with get_session() as session:
+                session.add(AuditLog(
+                    action="manual_sell",
+                    actor=str(update.effective_user.id),
+                    detail={"symbol": symbol, "price": price},
+                ))
+            record_portfolio_snapshot("manual_sell", prices)
+
+        await update.message.reply_text(
+            f"{'Done' if ok else 'Failed'}: {msg}\nPrice: ${price:,.2f}",
+            parse_mode=None,
+        )
+
+    except Exception as e:
+        logger.error("cmd_manual_sell crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Error: {e}", parse_mode=None)
+        except Exception:
+            pass
+
+
 def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
@@ -933,5 +1101,7 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("reset_challenge", cmd_reset_challenge))
     app.add_handler(CommandHandler("new_challenge", cmd_new_challenge))
     app.add_handler(CommandHandler("rebalance_suggestion", cmd_rebalance_suggestion))
+    app.add_handler(CommandHandler("manual_buy", cmd_manual_buy))
+    app.add_handler(CommandHandler("manual_sell", cmd_manual_sell))
 
     return app
