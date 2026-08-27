@@ -129,14 +129,19 @@ def run_bot():
         logger.info("Proactive notifications target chat: ***%s", _chat_id[-4:])
 
     async def send_to_chat(text: str):
+        bot = app.bot
+        if not _chat_id:
+            logger.error("send_to_chat called but TELEGRAM_CHAT_ID is not set — message dropped")
+            return
         try:
-            bot = app.bot
-            if not _chat_id:
-                logger.error("send_to_chat called but TELEGRAM_CHAT_ID is not set — message dropped")
-                return
             await bot.send_message(chat_id=int(_chat_id), text=text, parse_mode="Markdown")
-        except Exception as e:
-            logger.error("Failed to send message: %s", e)
+        except Exception:
+            logger.warning("Markdown send failed, retrying as plain text")
+            try:
+                await bot.send_message(chat_id=int(_chat_id), text=text, parse_mode=None)
+            except Exception as e:
+                logger.error("Plain text send also failed: %s", e)
+                raise
 
     set_send_message_func(send_to_chat)
 
