@@ -248,6 +248,7 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
     with get_session() as session:
         asset_id = _resolve_asset_id(session, asset.symbol)
         if asset_id is None:
+            logger.error("ASSET_NOT_IN_DB asset=%s — signal will NOT be saved or notified", asset.symbol)
             return result
 
         lifecycle = SignalLifecycle(session)
@@ -708,9 +709,31 @@ async def health_check_job():
         logger.error("health_check failed: %s", e, exc_info=True)
 
 
+def _sync_assets_from_config():
+    with get_session() as session:
+        repo = AssetRepository(session)
+        created = 0
+        for asset_cfg in settings.assets:
+            existing = repo.get_by_symbol(asset_cfg.symbol)
+            if existing is None:
+                repo.upsert(
+                    symbol=asset_cfg.symbol,
+                    kraken_pair=asset_cfg.kraken_pair,
+                    coinbase_pair=asset_cfg.coinbase_pair,
+                )
+                created += 1
+        session.commit()
+        if created:
+            logger.info("Synced %d new assets from config to DB: now %d total",
+                        created, len(settings.assets))
+        else:
+            logger.info("All %d config assets already in DB", len(settings.assets))
+
+
 async def startup_sweep():
     logger.info("Running startup sweep...")
     try:
+        _sync_assets_from_config()
         with get_session() as session:
             lifecycle = SignalLifecycle(session)
             expired = lifecycle.expire_old_signals()
