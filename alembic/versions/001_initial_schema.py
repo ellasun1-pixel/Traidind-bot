@@ -84,9 +84,9 @@ def upgrade() -> None:
     op.create_table(
         "paper_account",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("balance_usd", sa.Numeric(12, 2), nullable=False, server_default="1000.00"),
-        sa.Column("peak_balance", sa.Numeric(12, 2), nullable=False, server_default="1000.00"),
-        sa.Column("starting_balance", sa.Numeric(12, 2), nullable=False, server_default="1000.00"),
+        sa.Column("balance_usd", sa.Numeric(12, 2), nullable=False, server_default="10000.00"),
+        sa.Column("peak_balance", sa.Numeric(12, 2), nullable=False, server_default="10000.00"),
+        sa.Column("starting_balance", sa.Numeric(12, 2), nullable=False, server_default="10000.00"),
         sa.Column("realized_pnl", sa.Numeric(12, 2), nullable=False, server_default="0.00"),
         sa.Column("daily_loss", sa.Numeric(12, 2), nullable=False, server_default="0.00"),
         sa.Column("daily_loss_date", sa.Date(), nullable=False, server_default=sa.text("CURRENT_DATE")),
@@ -220,7 +220,7 @@ def upgrade() -> None:
     # Create initial paper account with $1000 starting balance
     op.execute("""
         INSERT INTO paper_account (balance_usd, peak_balance, starting_balance, strategy_version)
-        VALUES (1000.00, 1000.00, 1000.00, '1.0')
+        VALUES (10000.00, 10000.00, 10000.00, '1.0')
     """)
 
 

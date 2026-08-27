@@ -81,7 +81,7 @@ class TestSchemaCompleteness:
 
             account = conn.execute(text("SELECT balance_usd FROM paper_account")).fetchone()
             assert account is not None
-            assert float(account[0]) == 1000.00
+            assert float(account[0]) == 10000.00
 
     def test_check_required_tables_detects_missing(self, fresh_db):
         """_check_required_tables returns missing tables on an empty database."""

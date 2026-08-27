@@ -104,9 +104,9 @@ class PaperAccount(Base):
     __tablename__ = "paper_account"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    balance_usd = Column(Numeric(12, 2), nullable=False, default=1000.00)
-    peak_balance = Column(Numeric(12, 2), nullable=False, default=1000.00)
-    starting_balance = Column(Numeric(12, 2), nullable=False, default=1000.00)
+    balance_usd = Column(Numeric(12, 2), nullable=False, default=10000.00)
+    peak_balance = Column(Numeric(12, 2), nullable=False, default=10000.00)
+    starting_balance = Column(Numeric(12, 2), nullable=False, default=10000.00)
     realized_pnl = Column(Numeric(12, 2), nullable=False, default=0.00)
     daily_loss = Column(Numeric(12, 2), nullable=False, default=0.00)
     daily_loss_date = Column(Date, nullable=False, default=lambda: datetime.now(timezone.utc).date())

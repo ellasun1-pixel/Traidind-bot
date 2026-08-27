@@ -8,6 +8,13 @@ def rm():
     return RiskManager()
 
 
+SB = settings.starting_balance
+LL = settings.loss_level
+WL = settings.win_level
+MAX_TOTAL_RISK = SB * settings.max_total_open_risk_pct
+PER_TRADE_MAX = SB * settings.risk_per_trade_pct_max
+
+
 class TestDeadCodeRemoved:
     """Fix #16: calculate_position_size and PositionSizeResult should not exist."""
 
@@ -26,18 +33,16 @@ class TestDeadCodeRemoved:
 class TestRiskBudget:
     def test_within_budget(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=13.0,
-            current_open_risk_usd=12.0,
-
+            proposed_risk_usd=MAX_TOTAL_RISK * 0.3,
+            current_open_risk_usd=MAX_TOTAL_RISK * 0.3,
             open_positions_count=1,
         )
         assert ok
 
     def test_exceeds_total_risk(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=22.0,
-            current_open_risk_usd=20.0,
-
+            proposed_risk_usd=MAX_TOTAL_RISK * 0.6,
+            current_open_risk_usd=MAX_TOTAL_RISK * 0.5,
             open_positions_count=1,
         )
         assert not ok
@@ -45,9 +50,8 @@ class TestRiskBudget:
 
     def test_exceeds_per_trade_max(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=23.0,
+            proposed_risk_usd=PER_TRADE_MAX + 10,
             current_open_risk_usd=0.0,
-
             open_positions_count=0,
         )
         assert not ok
@@ -55,27 +59,24 @@ class TestRiskBudget:
 
     def test_at_per_trade_max_boundary(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=22.0,
+            proposed_risk_usd=PER_TRADE_MAX,
             current_open_risk_usd=0.0,
-
             open_positions_count=0,
         )
         assert ok
 
     def test_at_total_risk_boundary(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=20.0,
-            current_open_risk_usd=20.0,
-
+            proposed_risk_usd=MAX_TOTAL_RISK * 0.5,
+            current_open_risk_usd=MAX_TOTAL_RISK * 0.5,
             open_positions_count=1,
         )
         assert ok
 
     def test_just_over_total_risk_boundary(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=20.0,
-            current_open_risk_usd=20.01,
-
+            proposed_risk_usd=MAX_TOTAL_RISK * 0.5,
+            current_open_risk_usd=MAX_TOTAL_RISK * 0.5 + 0.01,
             open_positions_count=1,
         )
         assert not ok
@@ -83,9 +84,8 @@ class TestRiskBudget:
 
     def test_max_positions_reached(self, rm):
         ok, reason = rm.check_risk_budget(
-            proposed_risk_usd=12.0,
+            proposed_risk_usd=PER_TRADE_MAX * 0.5,
             current_open_risk_usd=0.0,
-
             open_positions_count=2,
         )
         assert not ok
@@ -93,60 +93,65 @@ class TestRiskBudget:
 
 
 class TestCircuitBreakers:
-    def test_balance_955_blocks_buy(self, rm):
-        value, note = rm.apply_circuit_breakers(955, 100, "BUY")
+    def test_balance_at_critical_blocks_buy(self, rm):
+        value, note = rm.apply_circuit_breakers(LL + 5, 1000, "BUY")
         assert value == 0.0
         assert "BLOCKED" in note
 
-    def test_balance_960_blocks_buy(self, rm):
-        value, note = rm.apply_circuit_breakers(960, 100, "BUY")
+    def test_balance_at_move_to_usd_blocks_buy(self, rm):
+        value, note = rm.apply_circuit_breakers(LL + 10, 1000, "BUY")
         assert value == 0.0
         assert "BLOCKED" in note
 
-    def test_balance_970_blocks_buy(self, rm):
-        value, note = rm.apply_circuit_breakers(970, 100, "BUY")
+    def test_balance_at_no_buy_level_blocks_buy(self, rm):
+        value, note = rm.apply_circuit_breakers(LL + 20, 1000, "BUY")
         assert value == 0.0
 
-    def test_balance_1110_blocks_buy(self, rm):
-        value, note = rm.apply_circuit_breakers(1110, 100, "BUY")
+    def test_balance_at_preserve_level_blocks_buy(self, rm):
+        value, note = rm.apply_circuit_breakers(WL - 10, 1000, "BUY")
         assert value == 0.0
         assert "preserve" in note.lower() or "BLOCKED" in note
 
-    def test_balance_1090_limits_buy(self, rm):
-        value, note = rm.apply_circuit_breakers(1095, 500, "BUY")
-        assert value <= 1095 * 0.20
+    def test_near_win_limits_buy(self, rm):
+        balance = WL - 25
+        value, note = rm.apply_circuit_breakers(balance, 5000, "BUY")
+        assert value <= balance * 0.20
 
-    def test_balance_below_1050_limits(self, rm):
-        value, note = rm.apply_circuit_breakers(1020, 600, "BUY")
-        assert value <= 1020 * 0.50
+    def test_below_mid_level_limits(self, rm):
+        balance = SB + 20
+        value, note = rm.apply_circuit_breakers(balance, 6000, "BUY")
+        assert value <= balance * 0.50
 
     def test_sell_allowed_at_low_balance(self, rm):
-        value, note = rm.apply_circuit_breakers(960, 100, "SELL")
-        assert value == 100
+        value, note = rm.apply_circuit_breakers(LL + 10, 1000, "SELL")
+        assert value == 1000
 
     def test_normal_balance(self, rm):
-        value, note = rm.apply_circuit_breakers(1060, 100, "BUY")
-        assert value == 100  # $100 is under 50% of $1060, so passes through
+        balance = SB + 60
+        value, note = rm.apply_circuit_breakers(balance, 1000, "BUY")
+        assert value == 1000
 
-    def test_circuit_breaker_1050_to_1089_caps_at_50_pct(self, rm):
-        value, note = rm.apply_circuit_breakers(1070, 600, "BUY")
-        assert value == 1070 * 0.50
+    def test_circuit_breaker_mid_range_caps_at_50_pct(self, rm):
+        balance = SB + 70
+        value, note = rm.apply_circuit_breakers(balance, 6000, "BUY")
+        assert value == balance * 0.50
         assert "50%" in note
 
-    def test_circuit_breaker_1050_to_1089_no_cap_if_under(self, rm):
-        value, note = rm.apply_circuit_breakers(1070, 100, "BUY")
-        assert value == 100
+    def test_circuit_breaker_mid_range_no_cap_if_under(self, rm):
+        balance = SB + 70
+        value, note = rm.apply_circuit_breakers(balance, 1000, "BUY")
+        assert value == 1000
 
 
 class TestChallengeStatus:
     def test_won(self, rm):
-        status = rm.get_balance_status(1120)
+        status = rm.get_balance_status(WL)
         assert status["challenge_status"] == "WON"
 
     def test_lost(self, rm):
-        status = rm.get_balance_status(950)
+        status = rm.get_balance_status(LL)
         assert status["challenge_status"] == "LOST"
 
     def test_active(self, rm):
-        status = rm.get_balance_status(1050)
+        status = rm.get_balance_status(SB + 50)
         assert status["challenge_status"] == "ACTIVE"

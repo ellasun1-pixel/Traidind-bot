@@ -250,7 +250,7 @@ class TestReportFormatting:
     def test_report_starting_balance(self):
         fmt = SignalFormatter(beginner_mode=False)
         text = fmt.format_report("morning", self._portfolio_summary())
-        assert "$1000.00" in text
+        assert f"${settings.starting_balance:.2f}" in text
 
     def test_report_realized_pnl(self):
         fmt = SignalFormatter(beginner_mode=False)

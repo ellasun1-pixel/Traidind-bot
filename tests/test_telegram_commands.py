@@ -572,16 +572,16 @@ def test_lost_challenge_stays_lost_after_equity_recovery():
 def test_won_challenge_stays_won_after_equity_drop():
     from src.portfolio.manager import PaperPortfolio
     p = PaperPortfolio()
-    p.balance_usd = 1130.0
+    p.balance_usd = settings.win_level + 10
     p.challenge_status = "active"
 
     p._update_challenge_status(prices={})
     assert p.challenge_status == "won"
 
-    p.balance_usd = 1000.0
+    p.balance_usd = settings.starting_balance
     p._update_challenge_status(prices={})
     assert p.challenge_status == "won", (
-        "Won challenge must remain won even if equity drops below $1,120"
+        "Won challenge must remain won even if equity drops below win level"
     )
 
 

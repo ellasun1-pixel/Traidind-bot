@@ -33,9 +33,9 @@ def run_challenge_simulation(
     result: BacktestResult,
     n_sims: int = 1000,
     block_size: int = 5,
-    starting_balance: float = 1000.0,
-    win_level: float = 1120.0,
-    loss_level: float = 950.0,
+    starting_balance: float = 10000.0,
+    win_level: float = 11200.0,
+    loss_level: float = 9500.0,
     max_days: int = 365,
     rng_seed: int | None = None,
 ) -> ChallengeSimResult:

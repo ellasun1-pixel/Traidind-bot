@@ -32,6 +32,12 @@ from src.health.models import HealthStatus, ComponentHealth
 class TestEndToEndSmoke:
     @pytest.fixture(autouse=True)
     def _setup(self):
+        db_file = settings.database_url.replace("sqlite:///", "")
+        if os.path.exists(db_file):
+            os.remove(db_file)
+        import src.database.session as db_session
+        db_session._engine = None
+        db_session._SessionLocal = None
         init_db()
         self.loop = asyncio.new_event_loop()
         yield
