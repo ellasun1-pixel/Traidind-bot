@@ -7,6 +7,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, update
 
+from src.config import settings
 from src.database.models import (
     Asset, Signal, PaperAccount, PaperPosition,
     TradeHistory, AppSetting, AuditLog, AlertHistory,
@@ -54,7 +55,9 @@ class PaperAccountRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def get_or_create(self, starting_balance: float = 1000.0) -> PaperAccount:
+    def get_or_create(self, starting_balance: float = None) -> PaperAccount:
+        if starting_balance is None:
+            starting_balance = settings.starting_balance
         account = self.session.query(PaperAccount).first()
         if account is None:
             account = PaperAccount(

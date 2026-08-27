@@ -42,39 +42,46 @@ class RiskManager:
         position_value_usd: float,
         signal_type: str,
     ) -> tuple[float, str]:
-        if balance <= 955:
+        critical_level = self.loss_level + 5
+        move_to_usd_level = self.loss_level + 15
+        no_buy_level = self.loss_level + 25
+        preserve_level = self.win_level - 10
+        near_win_level = self.win_level - 30
+        mid_level = self.starting_balance + 50
+
+        if balance <= critical_level:
             if signal_type == "BUY":
-                return 0.0, "BLOCKED: Balance ≤ $955 — no new trades allowed"
+                return 0.0, f"BLOCKED: Balance ≤ ${critical_level:.0f} — no new trades allowed"
             return position_value_usd, "CRITICAL WARNING: Balance near defeat"
 
-        if balance < 965:
+        if balance < move_to_usd_level:
             if signal_type == "BUY":
-                return 0.0, "BLOCKED: Balance < $965 — MOVE TO USD recommended"
+                return 0.0, f"BLOCKED: Balance < ${move_to_usd_level:.0f} — MOVE TO USD recommended"
             return position_value_usd, ""
 
-        if balance < 975:
+        if balance < no_buy_level:
             if signal_type == "BUY":
-                return 0.0, "BLOCKED: Balance < $975 — no new buys, only risk reduction"
+                return 0.0, f"BLOCKED: Balance < ${no_buy_level:.0f} — no new buys, only risk reduction"
             return position_value_usd, ""
 
-        if balance >= 1110:
+        if balance >= preserve_level:
             if signal_type == "BUY":
-                return 0.0, "BLOCKED: Balance ≥ $1110 — preserve balance to reach $1120"
+                return 0.0, f"BLOCKED: Balance ≥ ${preserve_level:.0f} — preserve balance to reach ${self.win_level:.0f}"
             return position_value_usd, ""
 
-        if balance >= 1090:
+        if balance >= near_win_level:
             max_value = balance * 0.20
             adjusted = min(position_value_usd, max_value)
             note = "Near win: min 80% in USD" if adjusted < position_value_usd else ""
             return adjusted, note
 
-        if balance >= 1050:
+        if balance >= mid_level:
             max_value = balance * 0.50
             adjusted = min(position_value_usd, max_value)
             note = "Protect profit: max 50% deployed" if adjusted < position_value_usd else ""
             return adjusted, note
 
-        if balance < 1050:
+        if balance < mid_level:
             max_value = balance * 0.50
             adjusted = min(position_value_usd, max_value)
             note = "Min 50% in USD required" if adjusted < position_value_usd else ""
@@ -99,18 +106,25 @@ class RiskManager:
         return "ACTIVE"
 
     def _active_breaker(self, balance: float) -> str:
-        if balance <= 955:
+        critical_level = self.loss_level + 5
+        move_to_usd_level = self.loss_level + 15
+        no_buy_level = self.loss_level + 25
+        mid_level = self.starting_balance + 50
+        near_win_level = self.win_level - 30
+        preserve_level = self.win_level - 10
+
+        if balance <= critical_level:
             return "CRITICAL: No trades, near defeat"
-        if balance < 965:
+        if balance < move_to_usd_level:
             return "MOVE_TO_USD recommended"
-        if balance < 975:
+        if balance < no_buy_level:
             return "No new buys allowed"
-        if balance < 1050:
+        if balance < mid_level:
             return "Min 50% cash"
-        if balance >= 1110:
+        if balance >= preserve_level:
             return "Preserve — no new positions"
-        if balance >= 1090:
+        if balance >= near_win_level:
             return "Strong signal only, 80% cash"
-        if balance >= 1050:
+        if balance >= mid_level:
             return "Protect profit, reduce risk"
         return "Normal"

@@ -7,7 +7,7 @@ from typing import Optional
 from src.config import settings
 from src.database import get_session
 from src.database.models import PaperPosition, TradeHistory, Asset, PortfolioSnapshot
-from src.database.repository import PositionRepository, TradeHistoryRepository
+from src.database.repository import PositionRepository, TradeHistoryRepository, PaperAccountRepository
 from src.risk.manager import RiskManager
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,8 @@ class PaperPortfolio:
             pnl = pos.close(exit_price)
             total_pnl += pnl
             proceeds = exit_price * pos.quantity
-            self.balance_usd += proceeds
+            exit_commission = pos.position_value_usd * settings.commission_pct
+            self.balance_usd += proceeds - exit_commission
             self.realized_pnl_total += pnl
             self.closed_trades.append(pos)
 
@@ -458,6 +459,14 @@ class PaperPortfolio:
                 exit_time=datetime.now(timezone.utc),
                 close_reason="signal",
             )
+
+            pnl = pos.realized_pnl or 0.0
+            if pnl < 0:
+                acct_repo = PaperAccountRepository(session)
+                account = acct_repo.get_or_create()
+                acct_repo.reset_daily_loss(account)
+                account.daily_loss = float(account.daily_loss) + abs(pnl)
+                session.flush()
 
     @classmethod
     def restore_from_db(cls) -> "PaperPortfolio":

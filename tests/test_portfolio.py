@@ -75,6 +75,62 @@ class TestCommissionAndSpread:
         assert portfolio.realized_pnl_total < 0
 
 
+    def test_balance_matches_realized_pnl_after_round_trip(self, portfolio):
+        """After buy+sell at known prices, balance = starting - all real costs (no leaked cents)."""
+        starting = portfolio.balance_usd
+        pos_value = 150.0
+        entry_price = 50000.0
+        exit_price = 50000.0
+
+        portfolio.confirm_buy(
+            symbol="BTC/USD",
+            entry_price=entry_price,
+            position_value_usd=pos_value,
+            stop_loss=48500.0,
+            risk_dollars=3.0,
+        )
+        portfolio.confirm_sell("BTC/USD", exit_price=exit_price)
+
+        entry_commission = pos_value * settings.commission_pct
+        entry_spread = pos_value * settings.spread_pct
+        exit_commission = pos_value * settings.commission_pct
+        total_costs = entry_commission + entry_spread + exit_commission
+
+        assert abs(portfolio.balance_usd - (starting - total_costs)) < 0.01, (
+            f"Balance {portfolio.balance_usd:.4f} != expected {starting - total_costs:.4f} "
+            f"(entry_comm={entry_commission:.4f}, spread={entry_spread:.4f}, exit_comm={exit_commission:.4f})"
+        )
+        assert abs(portfolio.realized_pnl_total - (-total_costs)) < 0.01, (
+            f"realized_pnl {portfolio.realized_pnl_total:.4f} != expected {-total_costs:.4f}"
+        )
+
+    def test_balance_consistent_with_pnl_on_profit(self, portfolio):
+        """On a profitable trade, balance change = realized_pnl exactly."""
+        starting = portfolio.balance_usd
+        pos_value = 100.0
+        entry_price = 1000.0
+        exit_price = 1050.0
+
+        portfolio.confirm_buy(
+            symbol="ETH/USD",
+            entry_price=entry_price,
+            position_value_usd=pos_value,
+            stop_loss=970.0,
+            risk_dollars=3.0,
+        )
+        portfolio.confirm_sell("ETH/USD", exit_price=exit_price)
+
+        balance_change = portfolio.balance_usd - starting
+        quantity = pos_value / entry_price
+        entry_commission = pos_value * settings.commission_pct
+        entry_spread = pos_value * settings.spread_pct
+        exit_commission = pos_value * settings.commission_pct
+        expected_pnl = (exit_price - entry_price) * quantity - entry_commission - entry_spread - exit_commission
+
+        assert abs(balance_change - expected_pnl) < 0.01
+        assert abs(portfolio.realized_pnl_total - expected_pnl) < 0.01
+
+
 class TestConfirmTrade:
     def test_trade_only_after_confirm(self, portfolio):
         assert len(portfolio.get_open_positions()) == 0

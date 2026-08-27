@@ -398,6 +398,12 @@ async def market_check_job():
             sched_repo.mark_partial_success(
                 job_name, error_summary, duration_ms=duration_ms,
             )
+        elif ok_count == 0 and unsafe_count > 0:
+            sched_repo.mark_partial_success(
+                job_name,
+                f"0/{len(active_assets)} OK, {unsafe_count} data_unsafe — no signals produced",
+                duration_ms=duration_ms,
+            )
         else:
             sched_repo.mark_success(job_name, duration_ms=duration_ms)
 

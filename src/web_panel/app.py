@@ -39,10 +39,10 @@ def main():
             "axis": {"range": [settings.loss_level, settings.win_level]},
             "bar": {"color": "green" if balance >= settings.starting_balance else "red"},
             "steps": [
-                {"range": [settings.loss_level, 975], "color": "lightcoral"},
-                {"range": [975, 1050], "color": "lightyellow"},
-                {"range": [1050, 1090], "color": "lightgreen"},
-                {"range": [1090, settings.win_level], "color": "limegreen"},
+                {"range": [settings.loss_level, settings.loss_level + 25], "color": "lightcoral"},
+                {"range": [settings.loss_level + 25, settings.starting_balance + 50], "color": "lightyellow"},
+                {"range": [settings.starting_balance + 50, settings.win_level - 30], "color": "lightgreen"},
+                {"range": [settings.win_level - 30, settings.win_level], "color": "limegreen"},
             ],
             "threshold": {
                 "line": {"color": "blue", "width": 2},
