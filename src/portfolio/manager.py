@@ -635,11 +635,30 @@ class PaperPortfolio:
                     portfolio.peak_balance, portfolio.challenge_status,
                 )
 
+            portfolio._sync_account_table()
+
         except Exception as e:
             logger.error("Failed to restore portfolio from DB, starting fresh: %s", e)
             return cls()
 
         return portfolio
+
+    def _sync_account_table(self) -> None:
+        try:
+            with get_session() as session:
+                acct_repo = PaperAccountRepository(session)
+                account = acct_repo.get_or_create()
+                account.balance_usd = self.balance_usd
+                account.peak_balance = self.peak_balance
+                account.realized_pnl = self.realized_pnl_total
+                account.challenge_status = self.challenge_status
+                session.flush()
+            logger.info(
+                "paper_account synced: balance=$%.2f peak=$%.2f status=%s",
+                self.balance_usd, self.peak_balance, self.challenge_status,
+            )
+        except Exception as e:
+            logger.error("Failed to sync paper_account table: %s", e)
 
     def _get_equity_estimate(self) -> float:
         position_value = sum(
