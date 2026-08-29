@@ -982,6 +982,7 @@ async def cmd_manual_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             stop_loss=stop_loss,
             risk_dollars=risk_dollars,
             prices=prices,
+            force=True,
         )
 
         if ok:

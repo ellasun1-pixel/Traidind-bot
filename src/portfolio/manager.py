@@ -90,9 +90,14 @@ class PaperPortfolio:
         risk_dollars: float,
         signal_id: Optional[int] = None,
         prices: Optional[dict[str, float]] = None,
+        force: bool = False,
     ) -> tuple[bool, str]:
+        warnings: list[str] = []
+
         if self.challenge_status != "active":
-            return False, f"Challenge is {self.challenge_status} — no new trades"
+            if not force:
+                return False, f"Challenge is {self.challenge_status} — no new trades"
+            warnings.append(f"Challenge is {self.challenge_status}")
 
         open_positions = [p for p in self.positions if p.status == "open"]
 
@@ -108,22 +113,29 @@ class PaperPortfolio:
             risk_dollars, total_open_risk, len(open_positions)
         )
         if not ok:
-            return False, reason
+            if not force:
+                return False, reason
+            warnings.append(reason)
 
         equity = self.get_total_equity(prices or {})
         adjusted_value, note = self.risk_manager.apply_circuit_breakers(
             equity, position_value_usd, "BUY"
         )
         if adjusted_value == 0:
-            return False, note
+            if not force:
+                return False, note
+            warnings.append(note)
+        else:
+            position_value_usd = adjusted_value
 
-        position_value_usd = adjusted_value
         commission = position_value_usd * settings.commission_pct
         spread_cost = position_value_usd * settings.spread_pct
         total_cost = position_value_usd + commission + spread_cost
 
         if total_cost > self.balance_usd:
-            return False, "Insufficient balance"
+            if not force:
+                return False, "Insufficient balance"
+            warnings.append(f"Insufficient balance (need ${total_cost:.2f}, have ${self.balance_usd:.2f})")
 
         quantity = position_value_usd / entry_price
         risk_per_unit = abs(entry_price - stop_loss) if stop_loss > 0 else 0
@@ -152,7 +164,10 @@ class PaperPortfolio:
             logger.error("Failed to persist BUY to DB: %s", e)
 
         logger.info("BUY confirmed: %s %.4f @ $%.2f (value=$%.2f)", symbol, quantity, entry_price, position_value_usd)
-        return True, f"Bought {quantity:.6f} {symbol} @ ${entry_price:.2f}"
+        msg = f"Bought {quantity:.6f} {symbol} @ ${entry_price:.2f}"
+        if warnings:
+            msg += "\nWarnings: " + "; ".join(warnings)
+        return True, msg
 
     def confirm_sell(
         self, symbol: str, exit_price: float, signal_id: Optional[int] = None,

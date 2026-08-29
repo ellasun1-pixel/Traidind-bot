@@ -387,7 +387,7 @@ class TestStrategyReachability:
         with patch("src.strategy.engine.compute_indicators", return_value=df):
             signal = engine.analyze(
                 "ETH/USD", df, df, current_price,
-                1000.0, [], 0.0,
+                settings.starting_balance, [], 0.0,
             )
         assert signal.signal_type == "NO_TRADE"
 
@@ -677,7 +677,7 @@ class TestRepeatedChopDiagnosis:
         engine = StrategyEngine()
         regimes = {}
         for symbol, (df, price) in datasets.items():
-            sig = engine.analyze(symbol, df, df, price, 1000.0, [], 0.0)
+            sig = engine.analyze(symbol, df, df, price, settings.starting_balance, [], 0.0)
             regimes[symbol] = sig.regime
 
         regime_values = list(regimes.values())
