@@ -852,3 +852,36 @@ class TestForceBuy:
         )
         assert not ok2
         assert "Already have an open position" in msg2
+
+    def test_force_buy_preserves_full_amount(self):
+        """force=True must not silently reduce position size via circuit breakers."""
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
+        requested_value = settings.starting_balance
+        ok, msg = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=50000.0,
+            position_value_usd=requested_value, stop_loss=48500.0,
+            risk_dollars=300.0, force=True,
+        )
+        assert ok, f"force=True should succeed: {msg}"
+        open_pos = [p for p in portfolio.positions if p.status == "open"]
+        assert len(open_pos) == 1
+        assert open_pos[0].position_value_usd == requested_value, (
+            f"force=True must buy full requested amount ${requested_value}, "
+            f"got ${open_pos[0].position_value_usd}"
+        )
+        assert "overridden by manual command" in msg
+
+    def test_normal_buy_respects_circuit_breaker_reduction(self):
+        """Without force, circuit breakers reduce position size."""
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
+        requested_value = settings.starting_balance
+        ok, msg = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=50000.0,
+            position_value_usd=requested_value, stop_loss=49900.0,
+            risk_dollars=20.0, force=False,
+        )
+        assert ok
+        open_pos = [p for p in portfolio.positions if p.status == "open"]
+        assert open_pos[0].position_value_usd < requested_value, (
+            "Circuit breakers should reduce position size without force"
+        )
