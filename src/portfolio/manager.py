@@ -507,6 +507,29 @@ class PaperPortfolio:
                     .all()
                 )
 
+                if not all_open:
+                    all_open_any = (
+                        session.query(PaperPosition)
+                        .join(Asset)
+                        .filter(PaperPosition.is_open.is_(True))
+                        .order_by(PaperPosition.opened_at.desc())
+                        .all()
+                    )
+                    if all_open_any:
+                        mode_values = [
+                            (op.id, op.asset.symbol, repr(op.mode), len(op.mode) if op.mode else -1)
+                            for op in all_open_any
+                        ]
+                        logger.error(
+                            "MODE_MISMATCH: filter mode=%r found 0 positions, "
+                            "but %d exist unfiltered: %s — adopting them and fixing mode",
+                            mode, len(all_open_any), mode_values,
+                        )
+                        for op in all_open_any:
+                            op.mode = mode
+                        session.flush()
+                        all_open = all_open_any
+
                 seen_symbols: set[str] = set()
                 open_positions: list[PaperPosition] = []
                 duplicate_count = 0
@@ -550,6 +573,27 @@ class PaperPortfolio:
                     .order_by(PaperPosition.closed_at.asc())
                     .all()
                 )
+
+                if not closed_positions:
+                    closed_any = (
+                        session.query(PaperPosition)
+                        .join(Asset)
+                        .filter(PaperPosition.is_open.is_(False))
+                        .filter(PaperPosition.close_reason != "duplicate_cleanup")
+                        .filter(PaperPosition.close_reason != "excess_cleanup")
+                        .filter(PaperPosition.close_reason != "challenge_reset")
+                        .order_by(PaperPosition.closed_at.asc())
+                        .all()
+                    )
+                    if closed_any:
+                        logger.error(
+                            "MODE_MISMATCH: %d closed positions found without mode filter — fixing",
+                            len(closed_any),
+                        )
+                        for cp in closed_any:
+                            cp.mode = mode
+                        session.flush()
+                        closed_positions = closed_any
 
                 latest_snap = (
                     session.query(PortfolioSnapshot)
