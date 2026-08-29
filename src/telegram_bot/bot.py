@@ -11,7 +11,7 @@ from telegram.ext import (
 )
 
 from src.config import settings, AgentMode
-from src.scheduler.jobs import get_portfolio, get_last_signals, clear_last_signals, get_scheduler_status, get_pipeline, record_portfolio_snapshot, get_live_prices
+from src.scheduler.jobs import get_portfolio, get_last_signals, clear_last_signals, get_scheduler_status, get_pipeline, record_portfolio_snapshot, get_live_prices, get_active_mode, set_active_mode
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session, AuditLog
 from src.database.models import Signal, Asset
@@ -66,8 +66,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/scheduler — Job execution status\n"
         "/health — Operational health dashboard\n"
         "/debug — Regime diagnostics (all or /debug BTC)\n"
-        "/manual\\_buy TICKER AMOUNT — Record a buy already made in Kraken\n"
+        "/manual\\_buy TICKER AMOUNT \\[@price\\] — Record a buy (optional real price)\n"
         "/manual\\_sell TICKER — Record a sell at current market price\n"
+        "/switch\\_mode live|paper — Switch between LIVE and PAPER portfolios\n"
+        "/sync\\_portfolio TICKER QTY CASH — Sync with actual exchange state\n"
         "/new\\_challenge — Reset and start a new paper challenge\n"
         "/help — Show this message"
     )
@@ -83,10 +85,14 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         portfolio._update_challenge_status(prices)
 
+        active_mode = get_active_mode()
+        mode_label = "LIVE" if active_mode == "LIVE_FUNDED" else "PAPER"
+
         status_lines = [
             "\U0001f4ca *Status*",
             "",
-            f"Mode: {_esc(settings.agent_mode.value)}",
+            f"Portfolio: {_esc(mode_label)}",
+            f"Agent: {_esc(settings.agent_mode.value)}",
             f"Equity: ${equity:.2f}",
             f"Cash: ${portfolio.balance_usd:.2f}",
             f"Challenge: {portfolio.challenge_status.upper()}",
@@ -921,12 +927,14 @@ def _normalize_symbol(raw: str) -> str | None:
 async def cmd_manual_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         args = context.args or []
-        if len(args) != 2:
+        if len(args) < 2 or len(args) > 3:
             await update.message.reply_text(
-                "Usage: /manual_buy TICKER AMOUNT\n"
-                "Example: /manual_buy BTC 200\n\n"
-                "Records a buy you already made in Kraken.",
-                parse_mode=None,
+                "Usage: /manual\\_buy TICKER AMOUNT \\[@price\\]\n"
+                "Example: /manual\\_buy BTC 200\n"
+                "Example: /manual\\_buy ZEC 10000 @840.50\n\n"
+                "Records a buy you already made in Kraken.\n"
+                "Optional @price uses your real execution price instead of live market.",
+                parse_mode="Markdown",
             )
             return
 
@@ -952,6 +960,21 @@ async def cmd_manual_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Amount must be positive.", parse_mode=None)
             return
 
+        override_price: float | None = None
+        if len(args) == 3:
+            raw_price = args[2].strip().lstrip("@")
+            try:
+                override_price = float(raw_price)
+                if override_price <= 0:
+                    await update.message.reply_text("Price must be positive.", parse_mode=None)
+                    return
+            except ValueError:
+                await update.message.reply_text(
+                    f"'{args[2]}' is not a valid price. Use: /manual_buy ZEC 10000 @840.50",
+                    parse_mode=None,
+                )
+                return
+
         asset_cfg = next((a for a in settings.assets if a.symbol == symbol), None)
         if not asset_cfg:
             known = ", ".join(a.symbol.split("/")[0] for a in settings.assets[:10])
@@ -971,14 +994,20 @@ async def cmd_manual_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        if symbol not in prices:
+        if override_price:
+            price = override_price
+            price_source = "manual"
+        elif symbol in prices:
+            price = prices[symbol]
+            price_source = "live"
+        else:
             await update.message.reply_text(
-                f"Could not fetch live price for {symbol}. Try again in a minute.",
+                f"Could not fetch live price for {symbol}. "
+                "Try again or specify price: /manual_buy ZEC 10000 @840",
                 parse_mode=None,
             )
             return
 
-        price = prices[symbol]
         stop_loss_pct = float(asset_cfg.stop_loss_pct) if hasattr(asset_cfg, "stop_loss_pct") else 0.03
         stop_loss = price * (1 - stop_loss_pct)
         risk_dollars = amount * stop_loss_pct
@@ -1000,15 +1029,16 @@ async def cmd_manual_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     session.add(AuditLog(
                         action="manual_buy",
                         actor=str(update.effective_user.id),
-                        detail={"symbol": symbol, "amount": amount, "price": price},
+                        detail={"symbol": symbol, "amount": amount, "price": price, "price_source": price_source},
                     ))
             except Exception as e:
                 logger.error("Failed to write manual_buy audit log: %s", e)
             record_portfolio_snapshot("manual_buy", prices)
 
+        price_note = f" (manual)" if price_source == "manual" else ""
         await update.message.reply_text(
             f"{'Done' if ok else 'Failed'}: {msg}\n"
-            f"Price: ${price:,.2f} | Stop: ${stop_loss:,.2f}",
+            f"Price: ${price:,.2f}{price_note} | Stop: ${stop_loss:,.2f}",
             parse_mode=None,
         )
 
@@ -1099,6 +1129,182 @@ async def cmd_manual_sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
+@owner_only
+async def cmd_switch_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        args = context.args or []
+        if len(args) != 1 or args[0].lower() not in ("live", "paper"):
+            await update.message.reply_text(
+                "Usage: /switch\\_mode live | paper\n\n"
+                "Switches the active portfolio between PAPER and LIVE modes.\n"
+                "Data is fully isolated — each mode has its own positions and balance.",
+                parse_mode="Markdown",
+            )
+            return
+
+        target = args[0].lower()
+        new_mode = "LIVE_FUNDED" if target == "live" else "PAPER_CHALLENGE"
+        old_mode = get_active_mode()
+
+        if new_mode == old_mode:
+            label = "LIVE" if new_mode == "LIVE_FUNDED" else "PAPER"
+            await update.message.reply_text(
+                f"Already in {label} mode.", parse_mode=None,
+            )
+            return
+
+        set_active_mode(new_mode)
+
+        if new_mode == "LIVE_FUNDED":
+            settings.agent_mode = AgentMode.LIVE_FUNDED
+        else:
+            settings.agent_mode = AgentMode.PAPER_CHALLENGE
+
+        try:
+            from src.database.repository import AppSettingRepository
+            with get_session() as session:
+                repo = AppSettingRepository(session)
+                repo.set("active_portfolio_mode", new_mode)
+                repo.set("agent_mode", settings.agent_mode.value)
+        except Exception as e:
+            logger.error("Failed to persist mode switch: %s", e)
+
+        portfolio = get_portfolio()
+        label = "LIVE" if new_mode == "LIVE_FUNDED" else "PAPER"
+        await update.message.reply_text(
+            f"Switched to {label} mode.\n"
+            f"Balance: ${portfolio.balance_usd:.2f}\n"
+            f"Open positions: {len([p for p in portfolio.positions if p.status == 'open'])}\n"
+            f"Status: {portfolio.challenge_status}",
+            parse_mode=None,
+        )
+
+        try:
+            with get_session() as session:
+                session.add(AuditLog(
+                    action="switch_mode",
+                    actor=str(update.effective_user.id),
+                    detail={"from": old_mode, "to": new_mode},
+                ))
+        except Exception as e:
+            logger.error("Failed to write switch_mode audit log: %s", e)
+
+    except Exception as e:
+        logger.error("cmd_switch_mode crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Error: {e}", parse_mode=None)
+        except Exception:
+            pass
+
+
+@owner_only
+async def cmd_sync_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        args = context.args or []
+        if len(args) != 3:
+            await update.message.reply_text(
+                "Usage: /sync\\_portfolio TICKER QUANTITY CASH\n"
+                "Example: /sync\\_portfolio ZEC 12.31281 0\n\n"
+                "Replaces current portfolio state with actual exchange state.\n"
+                "Use after executing trades on Kraken to sync the bot.",
+                parse_mode="Markdown",
+            )
+            return
+
+        symbol = _normalize_symbol(args[0])
+        if not symbol:
+            await update.message.reply_text(
+                "Could not parse ticker.", parse_mode=None,
+            )
+            return
+
+        try:
+            quantity = float(args[1])
+        except ValueError:
+            await update.message.reply_text(
+                f"'{args[1]}' is not a valid quantity.", parse_mode=None,
+            )
+            return
+
+        try:
+            cash = float(args[2])
+        except ValueError:
+            await update.message.reply_text(
+                f"'{args[2]}' is not a valid cash amount.", parse_mode=None,
+            )
+            return
+
+        if quantity < 0 or cash < 0:
+            await update.message.reply_text(
+                "Quantity and cash must be non-negative.", parse_mode=None,
+            )
+            return
+
+        asset_cfg = next((a for a in settings.assets if a.symbol == symbol), None)
+        if not asset_cfg:
+            known = ", ".join(a.symbol.split("/")[0] for a in settings.assets[:10])
+            await update.message.reply_text(
+                f"Unknown asset '{symbol}'. Known: {known}...", parse_mode=None,
+            )
+            return
+
+        import asyncio
+        try:
+            prices = await asyncio.wait_for(get_live_prices([symbol]), timeout=30)
+        except asyncio.TimeoutError:
+            await update.message.reply_text(
+                f"Price fetch timed out for {symbol}.", parse_mode=None,
+            )
+            return
+
+        if symbol not in prices:
+            await update.message.reply_text(
+                f"Could not fetch live price for {symbol}.", parse_mode=None,
+            )
+            return
+
+        current_price = prices[symbol]
+        portfolio = get_portfolio()
+        result = portfolio.sync_portfolio(
+            symbol=symbol,
+            quantity=quantity,
+            cash=cash,
+            current_price=current_price,
+        )
+
+        equity = portfolio.get_total_equity(prices)
+        record_portfolio_snapshot("sync_portfolio", prices)
+
+        await update.message.reply_text(
+            f"{result}\n"
+            f"Challenge: {portfolio.challenge_status}\n"
+            f"Distance to win: ${settings.win_level - equity:.2f}\n"
+            f"Distance to loss: ${equity - settings.loss_level:.2f}",
+            parse_mode=None,
+        )
+
+        try:
+            with get_session() as session:
+                session.add(AuditLog(
+                    action="sync_portfolio",
+                    actor=str(update.effective_user.id),
+                    detail={
+                        "symbol": symbol, "quantity": quantity, "cash": cash,
+                        "price": current_price, "equity": round(equity, 2),
+                        "mode": get_active_mode(),
+                    },
+                ))
+        except Exception as e:
+            logger.error("Failed to write sync_portfolio audit log: %s", e)
+
+    except Exception as e:
+        logger.error("cmd_sync_portfolio crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Error: {e}", parse_mode=None)
+        except Exception:
+            pass
+
+
 def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
@@ -1128,5 +1334,7 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("rebalance_suggestion", cmd_rebalance_suggestion))
     app.add_handler(CommandHandler("manual_buy", cmd_manual_buy))
     app.add_handler(CommandHandler("manual_sell", cmd_manual_sell))
+    app.add_handler(CommandHandler("switch_mode", cmd_switch_mode))
+    app.add_handler(CommandHandler("sync_portfolio", cmd_sync_portfolio))
 
     return app

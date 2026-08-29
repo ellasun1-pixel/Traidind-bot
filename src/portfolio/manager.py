@@ -70,7 +70,8 @@ class Position:
 
 
 class PaperPortfolio:
-    def __init__(self, starting_balance: float | None = None):
+    def __init__(self, starting_balance: float | None = None, mode: str = "PAPER_CHALLENGE"):
+        self.mode = mode
         self.starting_balance = starting_balance or settings.starting_balance
         self.balance_usd = self.starting_balance
         self.peak_balance = self.starting_balance
@@ -441,6 +442,7 @@ class PaperPortfolio:
             db_pos = repo.create(
                 asset_id=asset.id,
                 signal_id=str(signal_id) if signal_id else None,
+                mode=self.mode,
                 side="BUY",
                 quantity=pos.quantity,
                 entry_price=pos.entry_price,
@@ -492,14 +494,15 @@ class PaperPortfolio:
                 session.flush()
 
     @classmethod
-    def restore_from_db(cls) -> "PaperPortfolio":
-        portfolio = cls()
+    def restore_from_db(cls, mode: str = "PAPER_CHALLENGE") -> "PaperPortfolio":
+        portfolio = cls(mode=mode)
         try:
             with get_session() as session:
                 all_open = (
                     session.query(PaperPosition)
                     .join(Asset)
                     .filter(PaperPosition.is_open.is_(True))
+                    .filter(PaperPosition.mode == mode)
                     .order_by(PaperPosition.opened_at.desc())
                     .all()
                 )
@@ -540,6 +543,7 @@ class PaperPortfolio:
                     session.query(PaperPosition)
                     .join(Asset)
                     .filter(PaperPosition.is_open.is_(False))
+                    .filter(PaperPosition.mode == mode)
                     .filter(PaperPosition.close_reason != "duplicate_cleanup")
                     .filter(PaperPosition.close_reason != "excess_cleanup")
                     .filter(PaperPosition.close_reason != "challenge_reset")
@@ -653,18 +657,99 @@ class PaperPortfolio:
         try:
             with get_session() as session:
                 acct_repo = PaperAccountRepository(session)
-                account = acct_repo.get_or_create()
+                account = acct_repo.get_or_create(mode=self.mode)
                 account.balance_usd = self.balance_usd
                 account.peak_balance = self.peak_balance
                 account.realized_pnl = self.realized_pnl_total
                 account.challenge_status = self.challenge_status
                 session.flush()
             logger.info(
-                "paper_account synced: balance=$%.2f peak=$%.2f status=%s",
-                self.balance_usd, self.peak_balance, self.challenge_status,
+                "paper_account synced [%s]: balance=$%.2f peak=$%.2f status=%s",
+                self.mode, self.balance_usd, self.peak_balance, self.challenge_status,
             )
         except Exception as e:
             logger.error("Failed to sync paper_account table: %s", e)
+
+    def sync_portfolio(
+        self,
+        symbol: str,
+        quantity: float,
+        cash: float,
+        current_price: float,
+    ) -> str:
+        """Replace all positions and cash with the given state.
+
+        Used in LIVE_FUNDED mode to sync bot state with what actually
+        happened on the exchange.
+        """
+        for pos in list(self.positions):
+            if pos.status == "open":
+                pos.status = "closed"
+                pos.exit_price = pos.entry_price
+                pos.realized_pnl = 0.0
+        self.positions = []
+        self.closed_trades = []
+
+        self.balance_usd = cash
+        self.realized_pnl_total = 0.0
+
+        if quantity > 0 and current_price > 0:
+            position_value = quantity * current_price
+            pos = Position(
+                symbol=symbol,
+                side="BUY",
+                entry_price=current_price,
+                quantity=quantity,
+                position_value_usd=position_value,
+                commission_usd=0.0,
+                spread_cost_usd=0.0,
+                stop_loss=0.0,
+            )
+            self.positions.append(pos)
+
+        equity = self.get_total_equity({symbol: current_price} if quantity > 0 else {})
+        self.peak_balance = max(equity, self.starting_balance)
+        self.challenge_status = "active"
+        self._update_challenge_status({symbol: current_price} if quantity > 0 else {})
+
+        try:
+            with get_session() as session:
+                open_db = (
+                    session.query(PaperPosition)
+                    .filter(PaperPosition.is_open.is_(True))
+                    .filter(PaperPosition.mode == self.mode)
+                    .all()
+                )
+                repo = PositionRepository(session)
+                for db_pos in open_db:
+                    repo.close(db_pos, float(db_pos.entry_price), 0.0, "sync_replaced")
+                session.flush()
+
+                if quantity > 0:
+                    asset = session.query(Asset).filter(Asset.symbol == symbol).first()
+                    if asset:
+                        db_pos = repo.create(
+                            asset_id=asset.id,
+                            mode=self.mode,
+                            side="BUY",
+                            quantity=quantity,
+                            entry_price=current_price,
+                            stop_loss=0.0,
+                        )
+                        self.positions[0]._db_position_id = db_pos.id
+        except Exception as e:
+            logger.error("Failed to sync portfolio to DB: %s", e)
+
+        self._sync_account_table()
+
+        logger.warning(
+            "PORTFOLIO_SYNCED [%s]: symbol=%s qty=%.8f cash=$%.2f equity=$%.2f",
+            self.mode, symbol, quantity, cash, equity,
+        )
+        return (
+            f"Portfolio synced: {quantity:.6f} {symbol} @ ${current_price:.2f}, "
+            f"cash=${cash:.2f}, equity=${equity:.2f}"
+        )
 
     def _get_equity_estimate(self) -> float:
         position_value = sum(

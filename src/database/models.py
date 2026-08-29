@@ -104,6 +104,7 @@ class PaperAccount(Base):
     __tablename__ = "paper_account"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    mode = Column(String(20), nullable=False, default="PAPER_CHALLENGE")
     balance_usd = Column(Numeric(12, 2), nullable=False, default=10000.00)
     peak_balance = Column(Numeric(12, 2), nullable=False, default=10000.00)
     starting_balance = Column(Numeric(12, 2), nullable=False, default=10000.00)
@@ -121,6 +122,7 @@ class PaperPosition(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
     signal_id = Column(String(36), ForeignKey("signals.id"))
+    mode = Column(String(20), nullable=False, default="PAPER_CHALLENGE")
     side = Column(String(4), nullable=False)
     quantity = Column(Numeric(18, 8), nullable=False)
     entry_price = Column(Numeric(18, 8), nullable=False)

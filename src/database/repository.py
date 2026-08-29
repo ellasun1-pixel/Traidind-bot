@@ -55,12 +55,13 @@ class PaperAccountRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def get_or_create(self, starting_balance: float = None) -> PaperAccount:
+    def get_or_create(self, starting_balance: float = None, mode: str = "PAPER_CHALLENGE") -> PaperAccount:
         if starting_balance is None:
             starting_balance = settings.starting_balance
-        account = self.session.query(PaperAccount).first()
+        account = self.session.query(PaperAccount).filter(PaperAccount.mode == mode).first()
         if account is None:
             account = PaperAccount(
+                mode=mode,
                 balance_usd=starting_balance,
                 peak_balance=starting_balance,
                 starting_balance=starting_balance,

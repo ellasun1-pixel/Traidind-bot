@@ -381,22 +381,23 @@ class TestMarketCheckJob:
             self.sent_messages.append(text)
 
         import src.scheduler.jobs as jobs
-        self._orig_portfolio = jobs._portfolio
+        self._orig_portfolios = jobs._portfolios.copy()
         self._orig_send = jobs._send_message_func
         self._orig_pipeline = jobs._pipeline
         self._orig_engine = jobs._engine
         self._orig_signals = jobs._last_signals.copy()
 
-        jobs._portfolio = MagicMock()
-        jobs._portfolio.balance_usd = 1000.0
-        jobs._portfolio.get_open_positions.return_value = []
-        jobs._portfolio.get_total_open_risk.return_value = 0.0
+        mock_portfolio = MagicMock()
+        mock_portfolio.balance_usd = 1000.0
+        mock_portfolio.get_open_positions.return_value = []
+        mock_portfolio.get_total_open_risk.return_value = 0.0
+        jobs._portfolios = {jobs._active_mode: mock_portfolio}
         jobs._send_message_func = mock_send
         jobs._last_signals = {}
 
         yield
 
-        jobs._portfolio = self._orig_portfolio
+        jobs._portfolios = self._orig_portfolios
         jobs._send_message_func = self._orig_send
         jobs._pipeline = self._orig_pipeline
         jobs._engine = self._orig_engine

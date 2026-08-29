@@ -29,7 +29,8 @@ from src.health.service import get_health_service
 
 logger = logging.getLogger(__name__)
 
-_portfolio: PaperPortfolio | None = None
+_portfolios: dict[str, PaperPortfolio] = {}
+_active_mode: str = "PAPER_CHALLENGE"
 _send_message_func = None
 _pipeline: MarketDataPipeline | None = None
 _engine: StrategyEngine | None = None
@@ -39,11 +40,20 @@ _last_signals: dict[str, TradeSignal] = {}
 _instance_id: str = str(uuid.uuid4())[:8]
 
 
-def get_portfolio() -> PaperPortfolio:
-    global _portfolio
-    if _portfolio is None:
-        _portfolio = PaperPortfolio.restore_from_db()
-    return _portfolio
+def get_portfolio(mode: str | None = None) -> PaperPortfolio:
+    m = mode or _active_mode
+    if m not in _portfolios:
+        _portfolios[m] = PaperPortfolio.restore_from_db(mode=m)
+    return _portfolios[m]
+
+
+def get_active_mode() -> str:
+    return _active_mode
+
+
+def set_active_mode(mode: str) -> None:
+    global _active_mode
+    _active_mode = mode
 
 
 async def get_live_prices(symbols: list[str] | None = None) -> dict[str, float]:
@@ -765,6 +775,11 @@ async def startup_sweep():
                     logger.info("Restored agent_mode=%s from DB", saved_mode)
                 except ValueError:
                     logger.warning("Unknown saved agent_mode '%s', keeping default", saved_mode)
+
+            saved_active = setting_repo.get("active_portfolio_mode")
+            if saved_active and saved_active in ("PAPER_CHALLENGE", "LIVE_FUNDED"):
+                set_active_mode(saved_active)
+                logger.info("Restored active_portfolio_mode=%s from DB", saved_active)
 
             saved_beginner = setting_repo.get("beginner_explanations")
             if saved_beginner is not None:
