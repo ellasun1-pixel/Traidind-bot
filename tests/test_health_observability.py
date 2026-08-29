@@ -382,26 +382,22 @@ class TestSignalEngineHealthCheck:
 
 class TestPaperTradingHealthCheck:
     def test_healthy_account(self, session, seed_account):
+        mock_portfolio = MagicMock()
+        mock_portfolio.balance_usd = 1000.0
+        mock_portfolio.challenge_status = "active"
         service = HealthService()
-        with patch("src.health.service.get_session") as mock_sess:
-            mock_sess.return_value.__enter__ = lambda s: session
-            mock_sess.return_value.__exit__ = MagicMock(return_value=False)
+        with patch("src.health.service.get_portfolio", return_value=mock_portfolio):
             with patch("src.health.service.settings") as mock_settings:
                 mock_settings.loss_level = 950.0
                 result = service.check_paper_trading()
         assert result.status == HealthStatus.HEALTHY
 
     def test_balance_at_loss_boundary(self, session):
-        acct = PaperAccount(
-            balance_usd=950.0, peak_balance=1000.0,
-            starting_balance=1000.0, challenge_status="active",
-        )
-        session.add(acct)
-        session.commit()
+        mock_portfolio = MagicMock()
+        mock_portfolio.balance_usd = 950.0
+        mock_portfolio.challenge_status = "active"
         service = HealthService()
-        with patch("src.health.service.get_session") as mock_sess:
-            mock_sess.return_value.__enter__ = lambda s: session
-            mock_sess.return_value.__exit__ = MagicMock(return_value=False)
+        with patch("src.health.service.get_portfolio", return_value=mock_portfolio):
             with patch("src.health.service.settings") as mock_settings:
                 mock_settings.loss_level = 950.0
                 result = service.check_paper_trading()

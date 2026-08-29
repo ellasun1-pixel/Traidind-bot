@@ -11,12 +11,17 @@ from src.health.models import HealthStatus, ComponentHealth, SystemHealth
 from src.database.session import check_db_health
 from src.database import get_session
 from src.database.repository import (
-    SchedulerStateRepository, SignalRepository, PaperAccountRepository,
+    SchedulerStateRepository, SignalRepository,
     HealthTransitionRepository,
 )
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def get_portfolio():
+    from src.scheduler.jobs import get_portfolio as _get_portfolio
+    return _get_portfolio()
 
 # Aggregation rules (documented):
 #
@@ -81,10 +86,9 @@ class HealthService:
                 sig_repo = SignalRepository(session)
                 pending_count = len(sig_repo.get_pending())
 
-                acct_repo = PaperAccountRepository(session)
-                account = acct_repo.get_or_create()
-                balance = float(account.balance_usd)
-                challenge_status = account.challenge_status
+            portfolio = get_portfolio()
+            balance = portfolio.balance_usd
+            challenge_status = portfolio.challenge_status
 
             scheduler = self._evaluate_scheduler(states, now)
             signal_engine = ComponentHealth(
@@ -362,11 +366,9 @@ class HealthService:
 
     def check_paper_trading(self) -> ComponentHealth:
         try:
-            with get_session() as session:
-                acct_repo = PaperAccountRepository(session)
-                account = acct_repo.get_or_create()
-                balance = float(account.balance_usd)
-                status_val = account.challenge_status
+            portfolio = get_portfolio()
+            balance = portfolio.balance_usd
+            status_val = portfolio.challenge_status
             return self._evaluate_paper_trading(balance, status_val, datetime.now(timezone.utc))
         except Exception as e:
             return ComponentHealth(
