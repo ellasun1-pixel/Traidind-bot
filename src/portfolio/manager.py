@@ -123,10 +123,16 @@ class PaperPortfolio:
         adjusted_value, note = self.risk_manager.apply_circuit_breakers(
             equity, position_value_usd, "BUY"
         )
-        if adjusted_value == 0:
-            if not force:
-                return False, note
-            warnings.append(note)
+        if force:
+            if note:
+                warnings.append(note)
+            if adjusted_value != position_value_usd and adjusted_value > 0:
+                warnings.append(
+                    f"Circuit breaker would reduce ${position_value_usd:.2f} → "
+                    f"${adjusted_value:.2f} (overridden by manual command)"
+                )
+        elif adjusted_value == 0:
+            return False, note
         else:
             position_value_usd = adjusted_value
 
