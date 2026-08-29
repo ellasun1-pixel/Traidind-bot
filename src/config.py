@@ -18,6 +18,7 @@ CONFIG_PATH = BASE_DIR / "config" / "assets.yaml"
 
 class AgentMode(str, Enum):
     PAPER_CHALLENGE = "PAPER_CHALLENGE"
+    LIVE_FUNDED = "LIVE_FUNDED"
     ALERT_ONLY = "ALERT_ONLY"
     REPLAY = "REPLAY"
     PAUSED = "PAUSED"

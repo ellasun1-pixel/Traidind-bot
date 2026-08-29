@@ -885,3 +885,106 @@ class TestForceBuy:
         assert open_pos[0].position_value_usd < requested_value, (
             "Circuit breakers should reduce position size without force"
         )
+
+
+class TestModeIsolation:
+    """Phase 1: LIVE_FUNDED mode — portfolio isolation and mode attribute."""
+
+    def test_portfolio_default_mode(self):
+        p = PaperPortfolio(starting_balance=settings.starting_balance)
+        assert p.mode == "PAPER_CHALLENGE"
+
+    def test_portfolio_live_funded_mode(self):
+        p = PaperPortfolio(starting_balance=settings.starting_balance, mode="LIVE_FUNDED")
+        assert p.mode == "LIVE_FUNDED"
+
+    def test_paper_and_live_are_independent(self):
+        paper = PaperPortfolio(starting_balance=settings.starting_balance, mode="PAPER_CHALLENGE")
+        live = PaperPortfolio(starting_balance=settings.starting_balance, mode="LIVE_FUNDED")
+
+        paper.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+        assert len(paper.get_open_positions()) == 1
+        assert len(live.get_open_positions()) == 0
+
+        live.confirm_buy("ETH/USD", 3000, 200, 2900, 5.0)
+        assert len(paper.get_open_positions()) == 1
+        assert len(live.get_open_positions()) == 1
+
+    def test_live_mode_uses_same_win_loss_levels(self):
+        live = PaperPortfolio(starting_balance=settings.starting_balance, mode="LIVE_FUNDED")
+        summary = live.get_portfolio_summary({})
+        assert summary["distance_to_win"] == round(settings.win_level - settings.starting_balance, 2)
+        assert summary["distance_to_loss"] == round(settings.starting_balance - settings.loss_level, 2)
+
+
+class TestSyncPortfolio:
+    """Phase 1: /sync_portfolio replaces current portfolio state."""
+
+    def test_sync_replaces_positions(self):
+        p = PaperPortfolio(starting_balance=settings.starting_balance, mode="LIVE_FUNDED")
+        p.confirm_buy("BTC/USD", 50000, 1000, 48500, 30.0)
+        assert len(p.get_open_positions()) == 1
+
+        result = p.sync_portfolio("ZEC/USD", 12.31281, 0, 840.0)
+        assert "synced" in result.lower()
+
+        open_pos = p.get_open_positions()
+        assert len(open_pos) == 1
+        assert open_pos[0]["symbol"] == "ZEC/USD"
+
+    def test_sync_sets_cash(self):
+        p = PaperPortfolio(starting_balance=settings.starting_balance, mode="LIVE_FUNDED")
+        p.sync_portfolio("ZEC/USD", 10.0, 500.0, 800.0)
+        assert p.balance_usd == 500.0
+
+    def test_sync_calculates_equity(self):
+        p = PaperPortfolio(starting_balance=settings.starting_balance, mode="LIVE_FUNDED")
+        p.sync_portfolio("ZEC/USD", 12.31281, 0, 840.0)
+        equity = p.get_total_equity({"ZEC/USD": 840.0})
+        expected = 12.31281 * 840.0
+        assert abs(equity - expected) < 0.01
+
+    def test_sync_zero_quantity_means_all_cash(self):
+        p = PaperPortfolio(starting_balance=settings.starting_balance, mode="LIVE_FUNDED")
+        p.sync_portfolio("ZEC/USD", 0, 5000.0, 840.0)
+        assert len(p.get_open_positions()) == 0
+        assert p.balance_usd == 5000.0
+
+    def test_sync_updates_challenge_status(self):
+        p = PaperPortfolio(starting_balance=settings.starting_balance, mode="LIVE_FUNDED")
+        p.sync_portfolio("ZEC/USD", 0, settings.loss_level - 10, 840.0)
+        assert p.challenge_status == "lost"
+
+    def test_sync_clears_old_trades(self):
+        p = PaperPortfolio(starting_balance=settings.starting_balance, mode="LIVE_FUNDED")
+        p.confirm_buy("BTC/USD", 50000, 100, 48500, 3.0)
+        p.confirm_sell("BTC/USD", 51000)
+        assert len(p.closed_trades) == 1
+
+        p.sync_portfolio("ZEC/USD", 10.0, 0, 800.0)
+        assert len(p.closed_trades) == 0
+
+    def test_sync_user_test_case(self):
+        """User's exact test: ZEC 12.31281 @ ~$840 should yield equity ~$10,342.14."""
+        p = PaperPortfolio(starting_balance=settings.starting_balance, mode="LIVE_FUNDED")
+        p.sync_portfolio("ZEC/USD", 12.31281, 0, 840.0)
+        equity = p.get_total_equity({"ZEC/USD": 840.0})
+        assert abs(equity - 10342.76) < 1.0, f"Expected ~$10,342, got ${equity:.2f}"
+
+
+class TestManualBuyWithPrice:
+    """Phase 1: /manual_buy with optional @price parameter."""
+
+    def test_buy_with_override_price(self):
+        p = PaperPortfolio(starting_balance=settings.starting_balance)
+        ok, msg = p.confirm_buy(
+            symbol="ZEC/USD",
+            entry_price=840.50,
+            position_value_usd=5000,
+            stop_loss=815.0,
+            risk_dollars=150.0,
+            force=True,
+        )
+        assert ok
+        open_pos = [pos for pos in p.positions if pos.status == "open"]
+        assert abs(open_pos[0].entry_price - 840.50) < 0.01
