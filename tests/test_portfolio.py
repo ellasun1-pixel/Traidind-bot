@@ -776,3 +776,45 @@ class TestResetChallengeCannotResurrect:
         portfolio.challenge_status = "active"
         result = portfolio.reset_challenge_status(prices={})
         assert portfolio.challenge_status in ("active", "won", "lost")
+
+
+class TestForceBuy:
+    """confirm_buy(force=True) records the trade even when risk checks fail."""
+
+    def test_force_buy_bypasses_risk_budget(self):
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
+        per_trade_max = settings.starting_balance * settings.risk_per_trade_pct_max
+        oversized_amount = per_trade_max * 20
+        ok, msg = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=50000.0,
+            position_value_usd=oversized_amount, stop_loss=48500.0,
+            risk_dollars=per_trade_max + 100,
+            force=True,
+        )
+        assert ok, f"force=True should always record: {msg}"
+        assert "Warnings" in msg
+        assert len([p for p in portfolio.positions if p.status == "open"]) == 1
+
+    def test_normal_buy_blocked_by_risk_budget(self):
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
+        per_trade_max = settings.starting_balance * settings.risk_per_trade_pct_max
+        ok, msg = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=50000.0,
+            position_value_usd=5000.0, stop_loss=48500.0,
+            risk_dollars=per_trade_max + 100,
+            force=False,
+        )
+        assert not ok
+
+    def test_force_buy_bypasses_circuit_breaker(self):
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
+        portfolio.balance_usd = settings.loss_level + 10
+        ok, msg = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=50000.0,
+            position_value_usd=100.0, stop_loss=48500.0,
+            risk_dollars=3.0,
+            force=True,
+        )
+        assert ok, f"force=True should bypass circuit breakers: {msg}"
+        assert "Warnings" in msg
+        assert "BLOCKED" in msg

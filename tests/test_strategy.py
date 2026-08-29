@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 import pandas as pd
 
+from src.config import settings
 from src.strategy.indicators import compute_indicators, ema, efficiency_ratio, adx
 from src.strategy.regime import classify_regime, MarketRegime
 from src.strategy.engine import StrategyEngine
@@ -98,13 +99,13 @@ class TestStrategyEngine:
     def test_no_trade_insufficient_data(self):
         engine = StrategyEngine()
         df = _make_daily_df(n=50)
-        signal = engine.analyze("BTC/USD", df, df, 50000, 1000, [], 0)
+        signal = engine.analyze("BTC/USD", df, df, 50000, settings.starting_balance, [], 0)
         assert signal.signal_type == "NO_TRADE"
 
     def test_no_buy_in_panic(self):
         engine = StrategyEngine()
         df = _make_daily_df(n=300, trend=-0.005)
-        signal = engine.analyze("BTC/USD", df, df, 30000, 1000, [], 0)
+        signal = engine.analyze("BTC/USD", df, df, 30000, settings.starting_balance, [], 0)
         assert signal.signal_type != "BUY" or signal.signal_type == "NO_TRADE"
 
     def test_sell_on_stop_loss(self):
@@ -117,22 +118,22 @@ class TestStrategyEngine:
             "risk_per_unit": 1000,
             "status": "open",
         }]
-        signal = engine.analyze("BTC/USD", df, df, 48500, 1000, positions, 3.0)
+        signal = engine.analyze("BTC/USD", df, df, 48500, settings.starting_balance, positions, 3.0)
         assert signal.signal_type == "SELL"
 
-    def test_no_buy_when_balance_1110(self):
+    def test_no_buy_near_win_level(self):
         engine = StrategyEngine()
         df = _make_daily_df(n=300, trend=0.002)
-        signal = engine.analyze("BTC/USD", df, df, 50000, 1110, [], 0)
+        signal = engine.analyze("BTC/USD", df, df, 50000, settings.win_level - 10, [], 0)
         assert signal.signal_type != "BUY"
 
-    def test_no_buy_when_balance_below_975(self):
+    def test_no_buy_near_loss_level(self):
         engine = StrategyEngine()
         df = _make_daily_df(n=300, trend=0.002)
-        signal = engine.analyze("BTC/USD", df, df, 50000, 970, [], 0)
+        signal = engine.analyze("BTC/USD", df, df, 50000, settings.loss_level + 20, [], 0)
         assert signal.signal_type != "BUY"
 
     def test_stale_data_no_signal(self):
         engine = StrategyEngine()
-        signal = engine.analyze("BTC/USD", pd.DataFrame(), pd.DataFrame(), 50000, 1000, [], 0)
+        signal = engine.analyze("BTC/USD", pd.DataFrame(), pd.DataFrame(), 50000, settings.starting_balance, [], 0)
         assert signal.signal_type == "NO_TRADE"

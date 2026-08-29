@@ -832,6 +832,35 @@ async def test_manual_buy_bracket_ticker(mock_update, mock_context):
     assert "Done" in text
 
 
+@pytest.mark.asyncio
+async def test_manual_buy_passes_force_true(mock_update, mock_context):
+    """manual_buy always records — passes force=True to confirm_buy."""
+    mock_context.args = ["BTC", "10000"]
+    mock_portfolio = MagicMock()
+    mock_portfolio.confirm_buy.return_value = (
+        True, "Bought 0.1 BTC/USD @ $100000.00\nWarnings: Risk exceeded"
+    )
+
+    with patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock,
+               return_value={"BTC/USD": 100000.0}), \
+         patch("src.telegram_bot.bot.get_portfolio", return_value=mock_portfolio), \
+         patch("src.telegram_bot.bot.get_session") as mock_gs, \
+         patch("src.telegram_bot.bot.record_portfolio_snapshot"):
+        mock_session = MagicMock()
+        mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+        await cmd_manual_buy(mock_update, mock_context)
+
+    mock_portfolio.confirm_buy.assert_called_once()
+    call_kwargs = mock_portfolio.confirm_buy.call_args
+    assert call_kwargs[1].get("force") is True or (
+        len(call_kwargs[0]) > 8 and call_kwargs[0][8] is True
+    ), "manual_buy must pass force=True to confirm_buy"
+    text = mock_update.message.reply_text.call_args[0][0]
+    assert "Done" in text
+
+
 # --- /manual_sell tests ---
 
 @pytest.mark.asyncio

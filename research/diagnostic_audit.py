@@ -126,8 +126,8 @@ def run_traced_backtest(asset: str, df: pd.DataFrame, warmup: int = 252) -> dict
     signal_log = []
     trade_log = []
     rejection_log = []
-    balance_below_975_at = None
-    rejected_after_975 = 0
+    balance_below_no_buy_at = None
+    rejected_after_no_buy = 0
 
     for i in range(warmup, len(engine_df) - 1):
         today = engine_df.iloc[i]
@@ -224,8 +224,8 @@ def run_traced_backtest(asset: str, df: pd.DataFrame, warmup: int = 252) -> dict
         signal_log.append(signal_entry)
 
         # Track balance guard rejections
-        if equity < 975 and balance_below_975_at is None:
-            balance_below_975_at = today_date
+        if equity < settings.loss_level + 25 and balance_below_no_buy_at is None:
+            balance_below_no_buy_at = today_date
 
         if signal.signal_type == "BUY" and signal.position_size_usd > 0:
             exec_price = float(tomorrow["open"]) * (1 + config.spread_pct / 2 + config.slippage_pct)
@@ -284,7 +284,7 @@ def run_traced_backtest(asset: str, df: pd.DataFrame, warmup: int = 252) -> dict
         equity_now = cash + sum(p["quantity"] * current_price for p in open_positions)
 
         # Track rejections after balance < 975
-        if balance_below_975_at is not None and signal.signal_type == "NO_TRADE":
+        if balance_below_no_buy_at is not None and signal.signal_type == "NO_TRADE":
             # Check if this candle would have passed all other filters
             daily_computed = compute_indicators(history)
             latest = daily_computed.iloc[-1]
@@ -295,13 +295,13 @@ def run_traced_backtest(asset: str, df: pd.DataFrame, warmup: int = 252) -> dict
             spike_ok = abs(float(latest.get("price_change_short", 0) or 0)) <= settings.vertical_spike_pct
             regime_ok = regime not in (MarketRegime.PANIC, MarketRegime.DATA_INSUFFICIENT)
 
-            if regime_ok and price_ok and candle_ok and spike_ok and equity_now < 975:
-                rejected_after_975 += 1
+            if regime_ok and price_ok and candle_ok and spike_ok and equity_now < settings.loss_level + 25:
+                rejected_after_no_buy += 1
                 rejection_log.append({
                     "date": today_date,
                     "equity": round(equity_now, 2),
                     "regime": regime.value,
-                    "reason": "balance_below_975",
+                    "reason": "balance_below_no_buy",
                 })
 
         balance_log.append({
@@ -314,8 +314,8 @@ def run_traced_backtest(asset: str, df: pd.DataFrame, warmup: int = 252) -> dict
         "signal_log": signal_log,
         "balance_log": balance_log,
         "rejection_log": rejection_log,
-        "balance_below_975_at": balance_below_975_at,
-        "rejected_after_975": rejected_after_975,
+        "balance_below_no_buy_at": balance_below_no_buy_at,
+        "rejected_after_no_buy": rejected_after_no_buy,
         "final_equity": round(cash + sum(p["quantity"] * current_price for p in open_positions), 2) if 'current_price' in dir() else round(cash, 2),
     }
 
@@ -530,8 +530,8 @@ def print_balance_analysis(bt_result: dict, period_name: str):
     if not trades:
         print("    No trades executed")
         print(f"    Balance stayed at starting value")
-        if bt_result["balance_below_975_at"]:
-            print(f"    *** Balance dropped below $975 at: {bt_result['balance_below_975_at']}")
+        if bt_result["balance_below_no_buy_at"]:
+            print(f"    *** Balance dropped below no-buy level (${settings.loss_level + 25:.0f}) at: {bt_result['balance_below_no_buy_at']}")
         return
 
     print(f"    Trade log:")
@@ -541,15 +541,15 @@ def print_balance_analysis(bt_result: dict, period_name: str):
               f"size=${t['position_usd']} pnl=${t['pnl']:+.2f} "
               f"reason={t['exit_reason']} balance_after=${t['balance_after']}")
 
-    if bt_result["balance_below_975_at"]:
-        print(f"\n    *** Balance first dropped below $975 at: {bt_result['balance_below_975_at']}")
-        print(f"    *** Valid signals rejected after that: {bt_result['rejected_after_975']}")
+    if bt_result["balance_below_no_buy_at"]:
+        print(f"\n    *** Balance first dropped below no-buy level (${settings.loss_level + 25:.0f}) at: {bt_result['balance_below_no_buy_at']}")
+        print(f"    *** Valid signals rejected after that: {bt_result['rejected_after_no_buy']}")
         if bt_result["rejection_log"]:
             print(f"    Rejection details:")
             for r in bt_result["rejection_log"]:
                 print(f"      {r['date']}: equity=${r['equity']} regime={r['regime']}")
     else:
-        print(f"\n    Balance never dropped below $975")
+        print(f"\n    Balance never dropped below no-buy level (${settings.loss_level + 25:.0f})")
 
     # Show balance before every signal
     buy_signals = [s for s in bt_result["signal_log"] if s["signal_type"] == "BUY"]
