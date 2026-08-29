@@ -58,22 +58,22 @@ class PaperAccountRepository:
     def get_or_create(self, starting_balance: float = None, mode: str = "PAPER_CHALLENGE") -> PaperAccount:
         if starting_balance is None:
             starting_balance = settings.starting_balance
-        account = self.session.query(PaperAccount).filter(PaperAccount.mode == mode).first()
+        account = self.session.query(PaperAccount).filter(PaperAccount.agent_mode == mode).first()
         if account is None:
             any_account = self.session.query(PaperAccount).first()
             if any_account is not None:
                 logger.error(
-                    "ACCOUNT_MODE_MISMATCH: no account with mode=%r, "
-                    "but found account id=%s with mode=%r (len=%d) — fixing",
-                    mode, any_account.id, any_account.mode,
-                    len(any_account.mode) if any_account.mode else -1,
+                    "ACCOUNT_MODE_MISMATCH: no account with agent_mode=%r, "
+                    "but found account id=%s with agent_mode=%r (len=%d) — fixing",
+                    mode, any_account.id, any_account.agent_mode,
+                    len(any_account.agent_mode) if any_account.agent_mode else -1,
                 )
-                any_account.mode = mode
+                any_account.agent_mode = mode
                 self.session.flush()
                 account = any_account
             else:
                 account = PaperAccount(
-                    mode=mode,
+                    agent_mode=mode,
                     balance_usd=starting_balance,
                     peak_balance=starting_balance,
                     starting_balance=starting_balance,
