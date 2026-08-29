@@ -100,16 +100,23 @@ def run_bot():
         sys.exit(1)
     logger.info("[3/8] Database: Connected (%s)", db_health["backend"])
 
-    init_db()
-    logger.info("[4/8] Migrations: Applied")
+    logger.info("[4/8] Starting schema verification...")
+    try:
+        init_db()
+    except Exception as e:
+        logger.error("[4/8] Schema verification FAILED: %s", e, exc_info=True)
+        sys.exit(1)
+    logger.info("[4/8] Schema verified")
 
+    logger.info("[5/8] Validating auth config...")
     try:
         validate_auth_config()
-        logger.info("[5/8] Authentication: Validated")
     except Exception as e:
         logger.error("[5/8] Authentication FAILED: %s", e)
         sys.exit(1)
+    logger.info("[5/8] Authentication: Validated")
 
+    logger.info("[6/8] Creating Telegram bot...")
     app = create_bot()
     logger.info("[6/8] Telegram bot: Created")
 

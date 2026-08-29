@@ -60,8 +60,8 @@ def get_engine(database_url: str | None = None):
     kwargs = {"echo": False, "pool_pre_ping": True}
     if not is_sqlite:
         kwargs.update({
-            "pool_size": 5,
-            "max_overflow": 10,
+            "pool_size": 2,
+            "max_overflow": 3,
             "pool_timeout": 30,
             "pool_recycle": 1800,
         })
@@ -141,13 +141,17 @@ def init_db(engine=None):
         Base.metadata.create_all(eng)
         logger.info("SQLite tables created via metadata (dev mode)")
     else:
-        _run_alembic_migrations(_get_database_url())
+        logger.info("init_db: verifying PostgreSQL schema (migrations run by Procfile)...")
         missing = _check_required_tables(eng)
         if missing:
-            raise RuntimeError(
-                f"Database schema incomplete after running migrations — "
-                f"missing tables: {', '.join(missing)}"
-            )
+            logger.warning("init_db: %d missing tables, running alembic as fallback...", len(missing))
+            _run_alembic_migrations(_get_database_url())
+            missing = _check_required_tables(eng)
+            if missing:
+                raise RuntimeError(
+                    f"Database schema incomplete after running migrations — "
+                    f"missing tables: {', '.join(missing)}"
+                )
         logger.info("PostgreSQL schema verified — all %d required tables present", len(REQUIRED_TABLES))
 
 
