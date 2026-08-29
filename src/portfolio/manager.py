@@ -488,7 +488,7 @@ class PaperPortfolio:
             pnl = pos.realized_pnl or 0.0
             if pnl < 0:
                 acct_repo = PaperAccountRepository(session)
-                account = acct_repo.get_or_create()
+                account = acct_repo.get_or_create(mode=self.mode)
                 acct_repo.reset_daily_loss(account)
                 account.daily_loss = float(account.daily_loss) + abs(pnl)
                 session.flush()
@@ -648,8 +648,11 @@ class PaperPortfolio:
             portfolio._sync_account_table()
 
         except Exception as e:
-            logger.error("Failed to restore portfolio from DB, starting fresh: %s", e)
-            return cls()
+            logger.error(
+                "RESTORE_FAILED mode=%s — starting fresh at $%.2f: %s",
+                mode, settings.starting_balance, e, exc_info=True,
+            )
+            return cls(mode=mode)
 
         return portfolio
 
