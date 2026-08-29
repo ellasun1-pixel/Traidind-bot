@@ -818,3 +818,37 @@ class TestForceBuy:
         assert ok, f"force=True should bypass circuit breakers: {msg}"
         assert "Warnings" in msg
         assert "BLOCKED" in msg
+
+    def test_force_buy_allows_duplicate_position(self):
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
+        ok1, _ = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=50000.0,
+            position_value_usd=100.0, stop_loss=48500.0,
+            risk_dollars=3.0, force=True,
+        )
+        assert ok1
+        ok2, msg2 = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=51000.0,
+            position_value_usd=100.0, stop_loss=49000.0,
+            risk_dollars=4.0, force=True,
+        )
+        assert ok2, f"force=True should allow duplicate positions: {msg2}"
+        assert "Already have an open position" in msg2
+        open_btc = [p for p in portfolio.positions if p.status == "open" and p.symbol == "BTC/USD"]
+        assert len(open_btc) == 2
+
+    def test_normal_buy_blocks_duplicate_position(self):
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
+        ok1, _ = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=50000.0,
+            position_value_usd=100.0, stop_loss=48500.0,
+            risk_dollars=3.0,
+        )
+        assert ok1
+        ok2, msg2 = portfolio.confirm_buy(
+            symbol="BTC/USD", entry_price=51000.0,
+            position_value_usd=100.0, stop_loss=49000.0,
+            risk_dollars=4.0, force=False,
+        )
+        assert not ok2
+        assert "Already have an open position" in msg2
