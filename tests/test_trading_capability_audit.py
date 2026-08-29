@@ -226,8 +226,8 @@ class TestIndicatorIndependence:
         btc_df = _make_trend_df(base_price=60000)
         eth_df = _make_chop_df(base_price=3500)
 
-        sig_btc = engine.analyze("BTC/USD", btc_df, btc_df, 60000.0, 1000.0, [], 0.0)
-        sig_eth = engine.analyze("ETH/USD", eth_df, eth_df, 3500.0, 1000.0, [], 0.0)
+        sig_btc = engine.analyze("BTC/USD", btc_df, btc_df, 60000.0, settings.starting_balance, [], 0.0)
+        sig_eth = engine.analyze("ETH/USD", eth_df, eth_df, 3500.0, settings.starting_balance, [], 0.0)
 
         assert sig_btc.asset_symbol == "BTC/USD"
         assert sig_eth.asset_symbol == "ETH/USD"
@@ -240,14 +240,14 @@ class TestErrorFallbackBehavior:
         """< 200 candles → NO_TRADE with 'Insufficient data', not fake CHOP."""
         engine = StrategyEngine()
         short_df = _candles_to_df(_make_daily_candles("BTC/USD", 60000, 100))
-        signal = engine.analyze("BTC/USD", short_df, short_df, 60000.0, 1000.0, [], 0.0)
+        signal = engine.analyze("BTC/USD", short_df, short_df, 60000.0, settings.starting_balance, [], 0.0)
         assert signal.signal_type == "NO_TRADE"
         assert "Insufficient" in signal.reason
 
     def test_empty_dataframe_returns_no_trade(self):
         """Empty DataFrame → NO_TRADE, not a crash."""
         engine = StrategyEngine()
-        signal = engine.analyze("BTC/USD", pd.DataFrame(), pd.DataFrame(), 60000.0, 1000.0, [], 0.0)
+        signal = engine.analyze("BTC/USD", pd.DataFrame(), pd.DataFrame(), 60000.0, settings.starting_balance, [], 0.0)
         assert signal.signal_type == "NO_TRADE"
         assert "Insufficient" in signal.reason
 
@@ -362,7 +362,7 @@ class TestStrategyReachability:
         with patch("src.strategy.engine.compute_indicators", return_value=enriched):
             signal = engine.analyze(
                 "BTC/USD", enriched, enriched, current_price,
-                1000.0, [], 0.0,
+                settings.starting_balance, [], 0.0,
             )
 
         assert signal.signal_type == "BUY", \
@@ -414,7 +414,7 @@ class TestStrategyReachability:
         with patch("src.strategy.engine.compute_indicators", return_value=df):
             signal = engine.analyze(
                 "XRP/USD", df, df, current_price,
-                1000.0, existing_position, 5.0,
+                settings.starting_balance, existing_position, 5.0,
             )
         assert signal.signal_type == "SELL"
         assert signal.priority == "CRITICAL"
@@ -430,7 +430,7 @@ class TestStrategyReachability:
         }]
         signal = engine.analyze(
             "BTC/USD", df, df, 48000.0,
-            1000.0, existing, 3.0,
+            settings.starting_balance, existing, 3.0,
         )
         assert signal.signal_type == "SELL"
         assert signal.priority == "CRITICAL"
@@ -448,7 +448,7 @@ class TestStrategyReachability:
         tp_price = 50000 + 1500 * settings.take_profit_risk_multiple + 100
         signal = engine.analyze(
             "BTC/USD", df, df, tp_price,
-            1000.0, existing, 3.0,
+            settings.starting_balance, existing, 3.0,
         )
         assert signal.signal_type == "TAKE_PROFIT"
 
@@ -463,7 +463,7 @@ class TestStrategyReachability:
         }]
         signal = engine.analyze(
             "BTC/USD", df, df, 50000.0,
-            960.0, existing, 3.0,
+            settings.loss_level + 10, existing, 3.0,
         )
         assert signal.signal_type in ("MOVE_TO_USD", "SELL")
         assert signal.priority == "CRITICAL"
@@ -534,8 +534,8 @@ class TestStrategyReachability:
 class TestPaperTradeLifecycle:
     def test_full_buy_sell_lifecycle(self):
         """BUY → position opened → balance deducted → SELL → P&L realized."""
-        portfolio = PaperPortfolio(starting_balance=1000.0)
-        assert portfolio.balance_usd == 1000.0
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
+        assert portfolio.balance_usd == settings.starting_balance
 
         ok, msg = portfolio.confirm_buy(
             symbol="BTC/USD",
@@ -545,7 +545,7 @@ class TestPaperTradeLifecycle:
             risk_dollars=3.0,
         )
         assert ok, msg
-        assert portfolio.balance_usd < 1000.0
+        assert portfolio.balance_usd < settings.starting_balance
         assert len(portfolio.get_open_positions()) == 1
         assert portfolio.get_open_positions()[0]["symbol"] == "BTC/USD"
 
@@ -560,28 +560,28 @@ class TestPaperTradeLifecycle:
 
     def test_balance_changes_from_1000(self):
         """After a trade, balance is no longer exactly $1000."""
-        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
         portfolio.confirm_buy("ETH/USD", 3500.0, 50.0, 3200.0, 1.5)
-        assert portfolio.balance_usd != 1000.0
+        assert portfolio.balance_usd != settings.starting_balance
 
     def test_stop_loss_exit_reduces_balance(self):
         """Stop-loss exit results in a loss."""
-        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
         portfolio.confirm_buy("BTC/USD", 50000.0, 100.0, 48500.0, 3.0)
         portfolio.confirm_sell("BTC/USD", exit_price=48500.0)
         assert portfolio.realized_pnl_total < 0
-        assert portfolio.balance_usd < 1000.0
+        assert portfolio.balance_usd < settings.starting_balance
 
     def test_take_profit_increases_balance(self):
         """Take-profit exit results in a gain."""
-        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
         portfolio.confirm_buy("BTC/USD", 50000.0, 100.0, 48500.0, 3.0)
         portfolio.confirm_sell("BTC/USD", exit_price=55000.0)
         assert portfolio.realized_pnl_total > 0
 
     def test_position_persisted_after_buy(self):
         """Open position details are accessible."""
-        portfolio = PaperPortfolio(starting_balance=1000.0)
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
         portfolio.confirm_buy("LINK/USD", 15.0, 30.0, 13.5, 1.0)
         positions = portfolio.get_open_positions()
         assert len(positions) == 1
@@ -589,16 +589,16 @@ class TestPaperTradeLifecycle:
         assert positions[0]["stop_loss"] == 13.5
 
     def test_challenge_won_at_target(self):
-        """Balance reaching $1120 sets challenge status to 'won'."""
-        portfolio = PaperPortfolio(starting_balance=1000.0)
-        portfolio.balance_usd = 1120.0
+        """Balance reaching win_level sets challenge status to 'won'."""
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
+        portfolio.balance_usd = settings.win_level
         portfolio._update_challenge_status()
         assert portfolio.challenge_status == "won"
 
     def test_challenge_lost_at_boundary(self):
-        """Balance hitting $950 sets challenge status to 'lost'."""
-        portfolio = PaperPortfolio(starting_balance=1000.0)
-        portfolio.balance_usd = 950.0
+        """Balance hitting loss_level sets challenge status to 'lost'."""
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
+        portfolio.balance_usd = settings.loss_level
         portfolio._update_challenge_status()
         assert portfolio.challenge_status == "lost"
 
@@ -690,7 +690,7 @@ class TestRepeatedChopDiagnosis:
         latest = df.iloc[-1]
         price = float(latest["close"])
         df.loc[df.index[-1], "ema200"] = price * 1.1
-        signal = engine.analyze("ETH/USD", df, df, price, 1000.0, [], 0.0)
+        signal = engine.analyze("ETH/USD", df, df, price, settings.starting_balance, [], 0.0)
         assert signal.signal_type == "NO_TRADE"
         assert len(signal.reason) > 0
 
@@ -749,13 +749,13 @@ class TestLoggingDiagnostics:
         _last_signals["BTC/USD"] = TradeSignal(
             signal_type="NO_TRADE", priority="MEDIUM",
             asset_symbol="BTC/USD", regime=MarketRegime.CHOP,
-            reason="No signal", current_balance=1000,
+            reason="No signal", current_balance=settings.starting_balance,
             distance_to_win=120, distance_to_loss=50,
         )
         _last_signals["ETH/USD"] = TradeSignal(
             signal_type="NO_TRADE", priority="MEDIUM",
             asset_symbol="ETH/USD", regime=MarketRegime.TREND,
-            reason="Price below EMA", current_balance=1000,
+            reason="Price below EMA", current_balance=settings.starting_balance,
             distance_to_win=120, distance_to_loss=50,
         )
 
@@ -779,7 +779,7 @@ class TestLoggingDiagnostics:
             asset_symbol="BTC/USD", regime=MarketRegime.CHOP,
             reason="Market choppy, EMA200 above price",
             explanation="Sideways range, no clear trend",
-            current_balance=1000, distance_to_win=120, distance_to_loss=50,
+            current_balance=settings.starting_balance, distance_to_win=120, distance_to_loss=50,
         )
         text = fmt.format_signal(sig)
         assert "NO\\_TRADE" in text
@@ -853,7 +853,7 @@ class TestTrendOnlyBuyRestriction:
         df.loc[df.index[-1], "er20"] = 0.1
         df.loc[df.index[-1], "ema200"] = price * 1.1
         with patch("src.strategy.engine.compute_indicators", return_value=df):
-            signal = engine.analyze("BTC/USD", df, df, price, 1000.0, [], 0.0)
+            signal = engine.analyze("BTC/USD", df, df, price, settings.starting_balance, [], 0.0)
         assert signal.signal_type == "NO_TRADE"
 
     def test_lowvol_regime_blocks_buy(self):
@@ -864,7 +864,7 @@ class TestTrendOnlyBuyRestriction:
         df.loc[df.index[-1], "rvol_pct25"] = 0.10
         df.loc[df.index[-1], "ema200"] = price * 1.05
         with patch("src.strategy.engine.compute_indicators", return_value=df):
-            signal = engine.analyze("BTC/USD", df, df, price, 1000.0, [], 0.0)
+            signal = engine.analyze("BTC/USD", df, df, price, settings.starting_balance, [], 0.0)
         assert signal.signal_type != "BUY"
 
     def test_panic_regime_blocks_buy(self):
@@ -874,14 +874,14 @@ class TestTrendOnlyBuyRestriction:
         df.loc[df.index[-1], "rvol"] = 1.0
         df.loc[df.index[-1], "rvol_median_252"] = 0.3
         with patch("src.strategy.engine.compute_indicators", return_value=df):
-            signal = engine.analyze("BTC/USD", df, df, price, 1000.0, [], 0.0)
+            signal = engine.analyze("BTC/USD", df, df, price, settings.starting_balance, [], 0.0)
         assert signal.signal_type != "BUY"
 
     def test_trend_regime_allows_buy(self):
         """TREND regime with all conditions → BUY."""
         engine, df, price = self._make_engine_with_trend_data()
         with patch("src.strategy.engine.compute_indicators", return_value=df):
-            signal = engine.analyze("BTC/USD", df, df, price, 1000.0, [], 0.0)
+            signal = engine.analyze("BTC/USD", df, df, price, settings.starting_balance, [], 0.0)
         assert signal.signal_type == "BUY"
         assert signal.regime == MarketRegime.TREND
 
@@ -901,18 +901,19 @@ class TestRiskParameterBoundaries:
     def test_max_total_open_risk_is_4_pct(self):
         assert settings.max_total_open_risk_pct == 0.04
 
-    def test_position_sizing_produces_approx_600(self):
-        """Default 1.8% risk with 3% stop → ~$600 position."""
+    def test_position_sizing_produces_correct_ratio(self):
+        """Default 1.8% risk with 3% stop → position ~60% of starting balance."""
         risk_dollars = settings.starting_balance * settings.risk_per_trade_pct_default
         stop_distance = 0.03
         position_value = risk_dollars / stop_distance
-        assert 550 <= position_value <= 650
+        expected = settings.starting_balance * 0.6
+        assert expected * 0.9 <= position_value <= expected * 1.1
 
-    def test_single_loss_survives_975_cutoff(self):
-        """One full loss at default risk leaves balance above $975."""
+    def test_single_loss_survives_cutoff(self):
+        """One full loss at default risk leaves balance well above loss_level."""
         risk_dollars = settings.starting_balance * settings.risk_per_trade_pct_default
         balance_after = settings.starting_balance - risk_dollars
-        assert balance_after > 975
+        assert balance_after > settings.loss_level + settings.starting_balance * 0.025
 
     def test_two_losses_above_defeat(self):
         """Two full losses at default risk still above $950 defeat level."""
@@ -939,7 +940,7 @@ class TestRiskParameterBoundaries:
         df.loc[df.index[-1], "rvol_pct25"] = 0.2
         df.loc[df.index[-1], "price_change_48h"] = 0.02
 
-        balance = 1000.0
+        balance = settings.starting_balance
         with patch("src.strategy.engine.compute_indicators", return_value=df):
             signal = engine.analyze("BTC/USD", df, df, current_price, balance, [], 0.0)
 
@@ -970,7 +971,7 @@ class TestRiskParameterBoundaries:
         df.loc[df.index[-1], "price_change_48h"] = 0.02
 
         with patch("src.strategy.engine.compute_indicators", return_value=df):
-            signal = engine.analyze("BTC/USD", df, df, current_price, 1000.0, [], 0.0)
+            signal = engine.analyze("BTC/USD", df, df, current_price, settings.starting_balance, [], 0.0)
 
         assert signal.signal_type == "NO_TRADE", \
             f"Expected NO_TRADE when profit < cost threshold, got {signal.signal_type}"

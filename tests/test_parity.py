@@ -76,7 +76,7 @@ def _run_production_engine(candles_df: pd.DataFrame, asset: str) -> list[TradeSi
             daily_df=history,
             h4_df=pd.DataFrame(),
             current_price=current_price,
-            portfolio_balance=1000.0,
+            portfolio_balance=settings.starting_balance,
             open_positions=[],
             total_open_risk_usd=0.0,
         )
@@ -122,7 +122,7 @@ class TestProductionBacktestParity:
                         daily_df=history,
                         h4_df=pd.DataFrame(),
                         current_price=current_price,
-                        portfolio_balance=1000.0,
+                        portfolio_balance=settings.starting_balance,
                         open_positions=[],
                         total_open_risk_usd=0.0,
                     )
@@ -149,7 +149,7 @@ class TestProductionBacktestParity:
                     daily_df=history,
                     h4_df=pd.DataFrame(),
                     current_price=close,
-                    portfolio_balance=1000.0,
+                    portfolio_balance=settings.starting_balance,
                     open_positions=[],
                     total_open_risk_usd=0.0,
                 )
@@ -175,7 +175,7 @@ class TestProductionBacktestParity:
                     daily_df=history,
                     h4_df=pd.DataFrame(),
                     current_price=float(daily.iloc[i]["close"]),
-                    portfolio_balance=1000.0,
+                    portfolio_balance=settings.starting_balance,
                     open_positions=[],
                     total_open_risk_usd=0.0,
                 )
@@ -204,7 +204,7 @@ class TestProductionBacktestParity:
             daily_df=history,
             h4_df=pd.DataFrame(),
             current_price=current_price,
-            portfolio_balance=1000.0,
+            portfolio_balance=settings.starting_balance,
             open_positions=existing,
             total_open_risk_usd=3.0,
         )
@@ -237,7 +237,7 @@ class TestProductionBacktestParity:
             daily_df=history,
             h4_df=pd.DataFrame(),
             current_price=current_price,
-            portfolio_balance=1000.0,
+            portfolio_balance=settings.starting_balance,
             open_positions=existing,
             total_open_risk_usd=3.0,
         )
@@ -275,7 +275,7 @@ class TestProductionBacktestParity:
             daily_df=history,
             h4_df=pd.DataFrame(),
             current_price=current_price,
-            portfolio_balance=1000.0,
+            portfolio_balance=settings.starting_balance,
             open_positions=existing,
             total_open_risk_usd=3.0,
         )
@@ -316,7 +316,7 @@ class TestProductionBacktestParity:
             daily_df=history,
             h4_df=pd.DataFrame(),
             current_price=current_price,
-            portfolio_balance=1000.0,
+            portfolio_balance=settings.starting_balance,
             open_positions=existing,
             total_open_risk_usd=3.0,
         )

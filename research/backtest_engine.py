@@ -29,12 +29,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ExecutionConfig:
-    starting_balance: float = 1000.0
+    starting_balance: float = 10000.0
     commission_pct: float = 0.0026
     spread_pct: float = 0.001
     slippage_pct: float = 0.0005
-    win_level: float = 1120.0
-    loss_level: float = 950.0
+    win_level: float = 11200.0
+    loss_level: float = 9500.0
 
 
 @dataclass

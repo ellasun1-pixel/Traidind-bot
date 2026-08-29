@@ -27,6 +27,7 @@ from research.challenge_sim import run_challenge_simulation
 from research.walk_forward import create_splits, create_rolling_splits
 from research.regime_analysis import analyze_regimes
 
+from src.config import settings
 from src.strategy.engine import StrategyEngine
 from src.strategy.indicators import compute_indicators
 from src.strategy.regime import classify_regime
@@ -206,7 +207,7 @@ class TestProductionBacktestParity:
             daily_df=history,
             h4_df=pd.DataFrame(),
             current_price=current_price,
-            portfolio_balance=1000.0,
+            portfolio_balance=settings.starting_balance,
             open_positions=[],
             total_open_risk_usd=0.0,
         )
@@ -217,7 +218,7 @@ class TestProductionBacktestParity:
             daily_df=history.copy(),
             h4_df=pd.DataFrame(),
             current_price=current_price,
-            portfolio_balance=1000.0,
+            portfolio_balance=settings.starting_balance,
             open_positions=[],
             total_open_risk_usd=0.0,
         )
@@ -243,7 +244,7 @@ class TestNoLookAhead:
                 daily_df=history,
                 h4_df=pd.DataFrame(),
                 current_price=current_price,
-                portfolio_balance=1000.0,
+                portfolio_balance=settings.starting_balance,
                 open_positions=[],
                 total_open_risk_usd=0.0,
             )
@@ -254,7 +255,7 @@ class TestNoLookAhead:
 class TestNextOpenExecution:
     def test_entry_at_next_open(self):
         df = _make_ohlcv(n_days=300, trend=0.001, volatility=0.01, seed=99)
-        config = ExecutionConfig(starting_balance=1000.0)
+        config = ExecutionConfig()
         bt = HistoricalBacktester(strategy="conservative", config=config)
         result = bt.run("BTC/USD", df)
 
@@ -269,7 +270,7 @@ class TestNextOpenExecution:
 class TestStopTakeProfitOrdering:
     def test_stop_loss_takes_priority_same_candle(self):
         """When both SL and TP could trigger on same candle, SL fires first."""
-        config = ExecutionConfig(starting_balance=1000.0)
+        config = ExecutionConfig()
         bt = HistoricalBacktester(strategy="conservative", config=config)
 
         for trade in []:
@@ -305,7 +306,7 @@ class TestWalkForwardSplitIntegrity:
 class TestMetricCalculations:
     def test_metrics_on_known_trades(self):
         df = _make_ohlcv(n_days=300, trend=0.0005, volatility=0.01, seed=42)
-        config = ExecutionConfig(starting_balance=1000.0)
+        config = ExecutionConfig()
         bt = HistoricalBacktester(strategy="conservative", config=config)
         result = bt.run("BTC/USD", df)
         metrics = compute_metrics(result)
@@ -325,13 +326,13 @@ class TestMetricCalculations:
         )
         metrics = compute_metrics(result)
         assert metrics.num_trades == 0
-        assert metrics.final_equity == 1000.0
+        assert metrics.final_equity == 10000.0
 
 
 class TestChallengeSimulation:
     def test_simulation_runs(self):
         df = _make_ohlcv(n_days=300, trend=0.0005, volatility=0.01, seed=42)
-        config = ExecutionConfig(starting_balance=1000.0)
+        config = ExecutionConfig()
         bt = HistoricalBacktester(strategy="conservative", config=config)
         result = bt.run("BTC/USD", df)
 
@@ -554,7 +555,7 @@ class TestProviderLimitedResponses:
 class TestTrailingStop:
     def test_trailing_stop_moves_to_breakeven(self):
         """When price reaches +1.5R, stop moves to entry (breakeven)."""
-        config = ExecutionConfig(starting_balance=1000.0)
+        config = ExecutionConfig()
         bt = HistoricalBacktester(strategy="conservative", config=config)
 
         df = _make_ohlcv(n_days=400, trend=0.001, volatility=0.015, seed=55)
