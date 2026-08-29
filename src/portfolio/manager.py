@@ -442,7 +442,7 @@ class PaperPortfolio:
             db_pos = repo.create(
                 asset_id=asset.id,
                 signal_id=str(signal_id) if signal_id else None,
-                mode=self.mode,
+                agent_mode=self.mode,
                 side="BUY",
                 quantity=pos.quantity,
                 entry_price=pos.entry_price,
@@ -502,7 +502,7 @@ class PaperPortfolio:
                     session.query(PaperPosition)
                     .join(Asset)
                     .filter(PaperPosition.is_open.is_(True))
-                    .filter(PaperPosition.mode == mode)
+                    .filter(PaperPosition.agent_mode == mode)
                     .order_by(PaperPosition.opened_at.desc())
                     .all()
                 )
@@ -517,7 +517,7 @@ class PaperPortfolio:
                     )
                     if all_open_any:
                         mode_values = [
-                            (op.id, op.asset.symbol, repr(op.mode), len(op.mode) if op.mode else -1)
+                            (op.id, op.asset.symbol, repr(op.agent_mode), len(op.agent_mode) if op.agent_mode else -1)
                             for op in all_open_any
                         ]
                         logger.error(
@@ -526,7 +526,7 @@ class PaperPortfolio:
                             mode, len(all_open_any), mode_values,
                         )
                         for op in all_open_any:
-                            op.mode = mode
+                            op.agent_mode = mode
                         session.flush()
                         all_open = all_open_any
 
@@ -566,7 +566,7 @@ class PaperPortfolio:
                     session.query(PaperPosition)
                     .join(Asset)
                     .filter(PaperPosition.is_open.is_(False))
-                    .filter(PaperPosition.mode == mode)
+                    .filter(PaperPosition.agent_mode == mode)
                     .filter(PaperPosition.close_reason != "duplicate_cleanup")
                     .filter(PaperPosition.close_reason != "excess_cleanup")
                     .filter(PaperPosition.close_reason != "challenge_reset")
@@ -591,7 +591,7 @@ class PaperPortfolio:
                             len(closed_any),
                         )
                         for cp in closed_any:
-                            cp.mode = mode
+                            cp.agent_mode = mode
                         session.flush()
                         closed_positions = closed_any
 
@@ -764,7 +764,7 @@ class PaperPortfolio:
                 open_db = (
                     session.query(PaperPosition)
                     .filter(PaperPosition.is_open.is_(True))
-                    .filter(PaperPosition.mode == self.mode)
+                    .filter(PaperPosition.agent_mode == self.mode)
                     .all()
                 )
                 repo = PositionRepository(session)
@@ -777,7 +777,7 @@ class PaperPortfolio:
                     if asset:
                         db_pos = repo.create(
                             asset_id=asset.id,
-                            mode=self.mode,
+                            agent_mode=self.mode,
                             side="BUY",
                             quantity=quantity,
                             entry_price=current_price,
