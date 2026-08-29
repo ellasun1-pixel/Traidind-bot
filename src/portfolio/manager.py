@@ -102,7 +102,9 @@ class PaperPortfolio:
         open_positions = [p for p in self.positions if p.status == "open"]
 
         if any(p.symbol == symbol for p in open_positions):
-            return False, f"Already have an open position in {symbol}"
+            if not force:
+                return False, f"Already have an open position in {symbol}"
+            warnings.append(f"Already have an open position in {symbol} — adding another")
 
         total_open_risk = sum(
             abs(p.entry_price - p.stop_loss) * p.quantity

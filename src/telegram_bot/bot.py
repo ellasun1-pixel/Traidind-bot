@@ -961,7 +961,16 @@ async def cmd_manual_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        prices = await get_live_prices([symbol])
+        import asyncio
+        try:
+            prices = await asyncio.wait_for(get_live_prices([symbol]), timeout=30)
+        except asyncio.TimeoutError:
+            await update.message.reply_text(
+                f"Price fetch timed out for {symbol}. Try again in a minute.",
+                parse_mode=None,
+            )
+            return
+
         if symbol not in prices:
             await update.message.reply_text(
                 f"Could not fetch live price for {symbol}. Try again in a minute.",
@@ -986,12 +995,15 @@ async def cmd_manual_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if ok:
-            with get_session() as session:
-                session.add(AuditLog(
-                    action="manual_buy",
-                    actor=str(update.effective_user.id),
-                    detail={"symbol": symbol, "amount": amount, "price": price},
-                ))
+            try:
+                with get_session() as session:
+                    session.add(AuditLog(
+                        action="manual_buy",
+                        actor=str(update.effective_user.id),
+                        detail={"symbol": symbol, "amount": amount, "price": price},
+                    ))
+            except Exception as e:
+                logger.error("Failed to write manual_buy audit log: %s", e)
             record_portfolio_snapshot("manual_buy", prices)
 
         await update.message.reply_text(
@@ -1038,7 +1050,16 @@ async def cmd_manual_sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        prices = await get_live_prices([symbol])
+        import asyncio
+        try:
+            prices = await asyncio.wait_for(get_live_prices([symbol]), timeout=30)
+        except asyncio.TimeoutError:
+            await update.message.reply_text(
+                f"Price fetch timed out for {symbol}. Try again in a minute.",
+                parse_mode=None,
+            )
+            return
+
         if symbol not in prices:
             await update.message.reply_text(
                 f"Could not fetch live price for {symbol}. Try again in a minute.",
@@ -1054,12 +1075,15 @@ async def cmd_manual_sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if ok:
-            with get_session() as session:
-                session.add(AuditLog(
-                    action="manual_sell",
-                    actor=str(update.effective_user.id),
-                    detail={"symbol": symbol, "price": price},
-                ))
+            try:
+                with get_session() as session:
+                    session.add(AuditLog(
+                        action="manual_sell",
+                        actor=str(update.effective_user.id),
+                        detail={"symbol": symbol, "price": price},
+                    ))
+            except Exception as e:
+                logger.error("Failed to write manual_sell audit log: %s", e)
             record_portfolio_snapshot("manual_sell", prices)
 
         await update.message.reply_text(
