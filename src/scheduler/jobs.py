@@ -823,6 +823,36 @@ async def startup_sweep():
         logger.error("Startup sweep failed: %s", e, exc_info=True)
 
 
+async def calendar_refresh_job() -> None:
+    try:
+        from src.calendar.manager import get_calendar_manager
+        mgr = get_calendar_manager()
+        stored = await mgr.refresh_events()
+        logger.info("Calendar refresh completed: %d new events", stored)
+    except Exception as e:
+        logger.error("calendar_refresh_job failed: %s", e, exc_info=True)
+
+
+async def calendar_alert_job() -> None:
+    try:
+        from src.calendar.manager import get_calendar_manager, format_event_alert
+        mgr = get_calendar_manager()
+        alerts = mgr.get_events_needing_alert()
+        if not alerts:
+            return
+
+        for event, hours_before in alerts:
+            msg = format_event_alert(event, hours_before)
+            if _send_message_func:
+                try:
+                    await _send_message_func(msg)
+                    logger.info("Calendar alert sent: %s (%dh before)", event.title, hours_before)
+                except Exception as e:
+                    logger.error("Failed to send calendar alert: %s", e)
+    except Exception as e:
+        logger.error("calendar_alert_job failed: %s", e, exc_info=True)
+
+
 def setup_scheduler() -> AsyncIOScheduler:
     tz = pytz.timezone(settings.timezone)
     scheduler = AsyncIOScheduler(timezone=tz)
@@ -873,6 +903,22 @@ def setup_scheduler() -> AsyncIOScheduler:
         id="health_check",
         replace_existing=True,
         misfire_grace_time=30,
+    )
+
+    scheduler.add_job(
+        calendar_refresh_job,
+        IntervalTrigger(hours=6),
+        id="calendar_refresh",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    scheduler.add_job(
+        calendar_alert_job,
+        IntervalTrigger(minutes=15),
+        id="calendar_alert",
+        replace_existing=True,
+        misfire_grace_time=120,
     )
 
     return scheduler

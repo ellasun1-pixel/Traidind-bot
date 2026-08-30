@@ -272,3 +272,23 @@ class PortfolioSnapshot(Base):
     open_positions_summary = Column(JSON)
     challenge_status = Column(String(10), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
+class CalendarEvent(Base):
+    __tablename__ = "calendar_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    unique_key = Column(String(120), nullable=False, unique=True)
+    title = Column(String(200), nullable=False)
+    event_time = Column(DateTime(timezone=True), nullable=False)
+    category = Column(String(20), nullable=False)
+    source = Column(String(30), nullable=False)
+    impact = Column(String(10), nullable=False, default="medium")
+    currency = Column(String(10), default="USD")
+    asset_symbol = Column(String(20))
+    description = Column(Text)
+    forecast = Column(String(50))
+    previous = Column(String(50))
+    alerted_24h = Column(Boolean, nullable=False, default=False)
+    alerted_1h = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)

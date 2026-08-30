@@ -12,6 +12,7 @@ from telegram.ext import (
 
 from src.config import settings, AgentMode
 from src.scheduler.jobs import get_portfolio, get_last_signals, clear_last_signals, get_scheduler_status, get_pipeline, record_portfolio_snapshot, get_live_prices, get_active_mode, set_active_mode
+from src.calendar.manager import get_calendar_manager, format_calendar_view
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session, AuditLog
 from src.database.models import Signal, Asset
@@ -70,6 +71,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/manual\\_sell TICKER — Record a sell at current market price\n"
         "/switch\\_mode live|paper — Switch between LIVE and PAPER portfolios\n"
         "/sync\\_portfolio TICKER QTY CASH — Sync with actual exchange state\n"
+        "/calendar — Upcoming market events (48h)\n"
         "/new\\_challenge — Reset and start a new paper challenge\n"
         "/help — Show this message"
     )
@@ -1327,6 +1329,21 @@ async def cmd_sync_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE)
             pass
 
 
+@owner_only
+async def cmd_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        manager = get_calendar_manager()
+        events = manager.get_upcoming(hours_ahead=48)
+        text = format_calendar_view(events)
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error("cmd_calendar crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Error loading calendar: {e}", parse_mode=None)
+        except Exception:
+            pass
+
+
 def create_bot(token: str | None = None) -> Application:
     bot_token = token or settings.telegram_bot_token
     if not bot_token:
@@ -1358,5 +1375,6 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("manual_sell", cmd_manual_sell))
     app.add_handler(CommandHandler("switch_mode", cmd_switch_mode))
     app.add_handler(CommandHandler("sync_portfolio", cmd_sync_portfolio))
+    app.add_handler(CommandHandler("calendar", cmd_calendar))
 
     return app
