@@ -245,6 +245,7 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
         portfolio_balance=equity,
         open_positions=open_positions,
         total_open_risk_usd=total_risk,
+        available_cash=portfolio.balance_usd,
     )
     signal.provider = safety.provider_used
 
