@@ -126,10 +126,18 @@ def init_db(engine=None):
         logger.info("init_db: verifying PostgreSQL schema...")
         missing = _check_required_tables(eng)
         if missing:
-            raise RuntimeError(
-                f"Database schema incomplete — missing tables: {', '.join(missing)}. "
-                f"Check that 'alembic upgrade head' ran successfully in Procfile before app start."
+            logger.warning(
+                "init_db: %d missing tables: %s — creating via metadata.create_all",
+                len(missing), ", ".join(missing),
             )
+            Base.metadata.create_all(eng, checkfirst=True)
+            still_missing = _check_required_tables(eng)
+            if still_missing:
+                raise RuntimeError(
+                    f"Database schema incomplete after create_all — "
+                    f"missing tables: {', '.join(still_missing)}"
+                )
+            logger.info("init_db: missing tables created successfully")
         logger.info("PostgreSQL schema verified — all %d required tables present", len(REQUIRED_TABLES))
 
 

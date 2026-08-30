@@ -1331,7 +1331,6 @@ async def cmd_sync_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @owner_only
 async def cmd_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("CALENDAR_HANDLER_CALLED", flush=True)
     try:
         manager = get_calendar_manager()
         events = manager.get_upcoming(hours_ahead=48)
@@ -1359,16 +1358,12 @@ async def cmd_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         await update.message.reply_text(text, parse_mode=None)
-        print("CALENDAR_REPLY_SENT", flush=True)
-    except BaseException as e:
-        import traceback
-        print(f"CALENDAR_ERROR: {e}", flush=True)
-        print(traceback.format_exc(), flush=True)
+    except Exception as e:
+        logger.error("cmd_calendar crashed: %s", e, exc_info=True)
         try:
             await update.message.reply_text(f"Error loading calendar: {e}", parse_mode=None)
         except Exception:
             logger.error("cmd_calendar fallback reply also failed: %s", e)
-        raise
 
 
 def create_bot(token: str | None = None) -> Application:
