@@ -1334,7 +1334,29 @@ async def cmd_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         manager = get_calendar_manager()
         events = manager.get_upcoming(hours_ahead=48)
+
+        if not events:
+            try:
+                await manager.refresh_events()
+                events = manager.get_upcoming(hours_ahead=48)
+            except Exception as refresh_err:
+                logger.warning("Calendar refresh on first /calendar failed: %s", refresh_err)
+
         text = format_calendar_view(events)
+
+        missing_keys = []
+        import os
+        if not os.getenv("JBLANKED_API_KEY"):
+            missing_keys.append("JBLANKED\\_API\\_KEY")
+        if not os.getenv("COINMARKETCAL_API_KEY"):
+            missing_keys.append("COINMARKETCAL\\_API\\_KEY")
+        if missing_keys:
+            text += (
+                "\n\nℹ️ _External calendar sources unavailable — "
+                f"missing env vars: {', '.join(missing_keys)}. "
+                "Only hardcoded FOMC dates are shown._"
+            )
+
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as e:
         logger.error("cmd_calendar crashed: %s", e, exc_info=True)
