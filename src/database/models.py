@@ -135,6 +135,9 @@ class PaperPosition(Base):
     realized_pnl = Column(Numeric(12, 2))
     close_reason = Column(String(20))
     is_open = Column(Boolean, nullable=False, default=True)
+    peak_price = Column(Numeric(18, 8))
+    tp1_fired = Column(Boolean, nullable=False, default=False)
+    tp2_fired = Column(Boolean, nullable=False, default=False)
 
     asset = relationship("Asset", back_populates="positions")
     signal = relationship("Signal", back_populates="position")

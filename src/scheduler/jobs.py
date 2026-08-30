@@ -297,7 +297,7 @@ async def _process_single_asset(asset: AssetConfig, cycle_mode: str | None = Non
             )
 
         snapshot = None
-        if signal.sell_pct < 1.0 and signal.signal_type == "REDUCE":
+        if signal.sell_pct > 0 and signal.signal_type == "REDUCE":
             tp_level = 1 if "level 1" in signal.reason else (2 if "level 2" in signal.reason else 0)
             snapshot = {
                 "sell_pct": signal.sell_pct,

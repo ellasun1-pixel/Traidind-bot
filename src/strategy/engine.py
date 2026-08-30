@@ -34,7 +34,7 @@ class TradeSignal:
     distance_to_win: float = 0.0
     distance_to_loss: float = 0.0
     provider: str = ""
-    sell_pct: float = 1.0
+    sell_pct: float = 0.0
     sell_quantity: float = 0.0
     keep_quantity: float = 0.0
     trailing_stop_price: float = 0.0

@@ -280,9 +280,22 @@ class PaperPortfolio:
         )
 
     def update_peak_prices(self, prices: dict[str, float]) -> None:
+        updated_ids = []
         for p in self.positions:
             if p.status == "open" and p.symbol in prices:
+                old_peak = p.peak_price
                 p.update_peak_price(prices[p.symbol])
+                if p.peak_price != old_peak and hasattr(p, "_db_position_id") and p._db_position_id:
+                    updated_ids.append((p._db_position_id, p.peak_price))
+        if updated_ids:
+            try:
+                with get_session() as session:
+                    for pos_id, peak in updated_ids:
+                        db_pos = session.get(PaperPosition, pos_id)
+                        if db_pos:
+                            db_pos.peak_price = peak
+            except Exception as e:
+                logger.error("Failed to persist peak_price updates: %s", e)
 
     def get_open_positions(self) -> list[dict]:
         return [p.to_dict() for p in self.positions if p.status == "open"]
@@ -302,11 +315,18 @@ class PaperPortfolio:
         return total
 
     def get_total_equity(self, prices: dict[str, float]) -> float:
-        position_value = sum(
-            prices.get(p.symbol, p.entry_price) * p.quantity
-            for p in self.positions
-            if p.status == "open"
-        )
+        position_value = 0.0
+        for p in self.positions:
+            if p.status == "open":
+                price = prices.get(p.symbol)
+                if price is None:
+                    price = p.entry_price
+                    if prices:
+                        logger.debug(
+                            "No live price for %s, using entry_price $%.2f for equity calc",
+                            p.symbol, price,
+                        )
+                position_value += price * p.quantity
         return self.balance_usd + position_value
 
     def get_drawdown(self, prices: dict[str, float]) -> float:
@@ -490,6 +510,7 @@ class PaperPortfolio:
                 quantity=pos.quantity,
                 entry_price=pos.entry_price,
                 stop_loss=pos.stop_loss,
+                peak_price=pos.peak_price,
             )
             pos._db_position_id = db_pos.id
 
@@ -550,6 +571,9 @@ class PaperPortfolio:
                 db_pos = session.get(PaperPosition, pos._db_position_id)
                 if db_pos:
                     db_pos.quantity = float(pos.quantity)
+                    db_pos.tp1_fired = pos.tp1_fired
+                    db_pos.tp2_fired = pos.tp2_fired
+                    db_pos.peak_price = pos.peak_price
             trade_repo = TradeHistoryRepository(session)
             trade_repo.create(
                 position_id=getattr(pos, "_db_position_id", None),
@@ -725,6 +749,10 @@ class PaperPortfolio:
                     )
                     open_pos._db_position_id = op.id
                     open_pos.opened_at = op.opened_at or datetime.now(timezone.utc)
+                    if op.peak_price is not None:
+                        open_pos.peak_price = float(op.peak_price)
+                    open_pos.tp1_fired = bool(op.tp1_fired)
+                    open_pos.tp2_fired = bool(op.tp2_fired)
                     portfolio.positions.append(open_pos)
 
                 portfolio.balance_usd = round(balance, 2)
