@@ -108,10 +108,12 @@ class CalendarManager:
                         already_alerted = getattr(ev, col_name, False)
                         if not already_alerted:
                             setattr(ev, col_name, True)
-                            session.expunge(ev)
                             alerts.append((ev, hours))
 
                 session.flush()
+
+                for ev, _ in alerts:
+                    session.expunge(ev)
         except Exception as e:
             logger.error("Failed to check alert windows: %s", e)
 
