@@ -1347,23 +1347,23 @@ async def cmd_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         missing_keys = []
         import os
         if not os.getenv("JBLANKED_API_KEY"):
-            missing_keys.append("JBLANKED\\_API\\_KEY")
+            missing_keys.append("JBLANKED_API_KEY")
         if not os.getenv("COINMARKETCAL_API_KEY"):
-            missing_keys.append("COINMARKETCAL\\_API\\_KEY")
+            missing_keys.append("COINMARKETCAL_API_KEY")
         if missing_keys:
             text += (
-                "\n\nℹ️ _External calendar sources unavailable — "
+                "\n\nℹ️ External calendar sources unavailable — "
                 f"missing env vars: {', '.join(missing_keys)}. "
-                "Only hardcoded FOMC dates are shown._"
+                "Only hardcoded FOMC dates are shown."
             )
 
-        await update.message.reply_text(text, parse_mode="Markdown")
+        await update.message.reply_text(text, parse_mode=None)
     except Exception as e:
         logger.error("cmd_calendar crashed: %s", e, exc_info=True)
         try:
             await update.message.reply_text(f"Error loading calendar: {e}", parse_mode=None)
         except Exception:
-            pass
+            logger.error("cmd_calendar fallback reply also failed: %s", e)
 
 
 def create_bot(token: str | None = None) -> Application:

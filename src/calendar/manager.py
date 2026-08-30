@@ -150,16 +150,16 @@ def format_event_alert(event: CalendarEvent, hours_before: int) -> str:
 
 def format_calendar_view(events: list[CalendarEvent]) -> str:
     if not events:
-        return "\U0001f4c5 *Market Calendar*\n\nNo upcoming events in the next 48 hours."
+        return "\U0001f4c5 Market Calendar\n\nNo upcoming events in the next 48 hours."
 
-    lines = ["\U0001f4c5 *Market Calendar — Next 48h*\n"]
+    lines = ["\U0001f4c5 Market Calendar — Next 48h\n"]
 
     current_date = None
     for ev in events:
         date_str = ev.event_time.strftime("%A, %b %d")
         if date_str != current_date:
             current_date = date_str
-            lines.append(f"\n*{date_str}*")
+            lines.append(f"\n{date_str}")
 
         time_str = ev.event_time.strftime("%H:%M UTC")
         impact_emoji = {"high": "\U0001f534", "medium": "\U0001f7e1", "low": "⚪"}.get(
@@ -167,12 +167,12 @@ def format_calendar_view(events: list[CalendarEvent]) -> str:
         )
         category_tag = "[MACRO]" if ev.category == "macro" else "[CRYPTO]"
 
-        entry = f"  {impact_emoji} `{time_str}` {category_tag} {ev.title}"
+        entry = f"  {impact_emoji} {time_str}  {category_tag} {ev.title}"
         if ev.asset_symbol:
             entry += f" ({ev.asset_symbol})"
         lines.append(entry)
 
-    lines.append(f"\n_Total: {len(events)} events_")
+    lines.append(f"\nTotal: {len(events)} events")
     return "\n".join(lines)
 
 
