@@ -71,6 +71,53 @@ def _handle_sigterm(signum, frame):
     sys.exit(0)
 
 
+def _ensure_agent_mode_column():
+    """Ensure 'mode' column is renamed to 'agent_mode' on both tables.
+
+    Runs before ORM init so queries don't fail with UndefinedColumn.
+    Idempotent — safe to run on every startup.
+    """
+    from sqlalchemy import create_engine, text, inspect as sa_inspect
+    db_url = os.environ.get("DATABASE_URL", "")
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    if not db_url:
+        logger.warning("DATABASE_URL not set, skipping column check")
+        return
+    engine = create_engine(db_url)
+    with engine.connect() as conn:
+        insp = sa_inspect(conn)
+        for table in ("paper_account", "paper_positions"):
+            try:
+                col_names = [c["name"] for c in insp.get_columns(table)]
+            except Exception:
+                logger.info("COLUMN_CHECK %s: table not found, skipping", table)
+                continue
+
+            has_mode = "mode" in col_names
+            has_agent_mode = "agent_mode" in col_names
+            logger.info("COLUMN_CHECK %s: mode=%s, agent_mode=%s", table, has_mode, has_agent_mode)
+
+            if has_agent_mode:
+                logger.info("COLUMN_CHECK %s: agent_mode exists, OK", table)
+            elif has_mode:
+                logger.info("COLUMN_CHECK %s: renaming mode -> agent_mode", table)
+                conn.execute(text(
+                    f'ALTER TABLE {table} RENAME COLUMN "mode" TO agent_mode'
+                ))
+                conn.commit()
+                logger.info("COLUMN_CHECK %s: rename DONE", table)
+            else:
+                logger.info("COLUMN_CHECK %s: adding agent_mode column", table)
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN agent_mode VARCHAR(20) "
+                    f"NOT NULL DEFAULT 'PAPER_CHALLENGE'"
+                ))
+                conn.commit()
+                logger.info("COLUMN_CHECK %s: added agent_mode DONE", table)
+    engine.dispose()
+
+
 def run_bot():
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
@@ -99,6 +146,8 @@ def run_bot():
         logger.error("[3/8] Database FAILED: %s", db_health.get("error", "unknown"))
         sys.exit(1)
     logger.info("[3/8] Database: Connected (%s)", db_health["backend"])
+
+    _ensure_agent_mode_column()
 
     logger.info("[4/8] Starting schema verification...")
     try:
