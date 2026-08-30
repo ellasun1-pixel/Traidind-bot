@@ -286,7 +286,26 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         prices=prices,
                     )
                     results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
-                elif sig.signal_type in ("SELL", "TAKE_PROFIT", "REDUCE", "MOVE_TO_USD"):
+                elif sig.signal_type == "REDUCE":
+                    snap = sig.market_snapshot or {}
+                    sell_pct = snap.get("sell_pct", 0.3)
+                    tp_level = snap.get("tp_level", 0)
+                    if tp_level == 0:
+                        reason = sig.reason or ""
+                        if "level 1" in reason:
+                            tp_level = 1
+                        elif "level 2" in reason:
+                            tp_level = 2
+                    ok, msg = portfolio.confirm_partial_sell(
+                        symbol=symbol,
+                        exit_price=entry_price,
+                        sell_pct=sell_pct,
+                        signal_id=sig.id,
+                        prices=prices,
+                        tp_level=tp_level,
+                    )
+                    results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
+                elif sig.signal_type in ("SELL", "TAKE_PROFIT", "MOVE_TO_USD"):
                     ok, msg = portfolio.confirm_sell(
                         symbol=symbol,
                         exit_price=entry_price,

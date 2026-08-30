@@ -41,11 +41,35 @@ class Position:
         self.opened_at = datetime.now(timezone.utc)
         self.exit_price: Optional[float] = None
         self.realized_pnl: Optional[float] = None
+        self.peak_price: float = entry_price
+        self.tp1_fired: bool = False
+        self.tp2_fired: bool = False
 
     def unrealized_pnl(self, current_price: float) -> float:
         if self.side == "BUY":
             return (current_price - self.entry_price) * self.quantity - self.commission_usd - self.spread_cost_usd
         return 0.0
+
+    def update_peak_price(self, current_price: float) -> None:
+        if current_price > self.peak_price:
+            self.peak_price = current_price
+
+    def partial_close(self, sell_quantity: float, exit_price: float) -> float:
+        if sell_quantity >= self.quantity:
+            return self.close(exit_price)
+        sell_fraction = sell_quantity / self.quantity
+        sell_value = self.position_value_usd * sell_fraction
+        sell_commission = sell_value * settings.commission_pct
+        entry_commission = self.commission_usd * sell_fraction
+        entry_spread = self.spread_cost_usd * sell_fraction
+        raw_pnl = (exit_price - self.entry_price) * sell_quantity
+        realized = raw_pnl - entry_commission - entry_spread - sell_commission
+
+        self.quantity -= sell_quantity
+        self.position_value_usd -= sell_value
+        self.commission_usd -= entry_commission
+        self.spread_cost_usd -= entry_spread
+        return realized
 
     def close(self, exit_price: float) -> float:
         self.exit_price = exit_price
@@ -66,6 +90,9 @@ class Position:
             "risk_per_unit": self.risk_per_unit,
             "status": self.status,
             "signal_id": self.signal_id,
+            "peak_price": self.peak_price,
+            "tp1_fired": self.tp1_fired,
+            "tp2_fired": self.tp2_fired,
         }
 
 
@@ -208,9 +235,10 @@ class PaperPortfolio:
         self, symbol: str, exit_price: float, sell_pct: float,
         signal_id: Optional[int] = None,
         prices: Optional[dict[str, float]] = None,
+        tp_level: int = 0,
     ) -> tuple[bool, str]:
-        if sell_pct <= 0 or sell_pct > 0.30:
-            return False, f"Partial sell capped at 30% — requested {sell_pct*100:.0f}%"
+        if sell_pct <= 0 or sell_pct > 1.0:
+            return False, f"Invalid sell percentage: {sell_pct*100:.0f}%"
 
         open_pos = [p for p in self.positions if p.status == "open" and p.symbol == symbol]
         if not open_pos:
@@ -228,18 +256,28 @@ class PaperPortfolio:
         pos.commission_usd *= (1 - sell_pct)
         pos.spread_cost_usd *= (1 - sell_pct)
 
+        if tp_level == 1:
+            pos.tp1_fired = True
+        elif tp_level == 2:
+            pos.tp2_fired = True
+
         self.balance_usd += proceeds
         self.realized_pnl_total += realized_pnl
         self._update_challenge_status(prices or {})
 
         logger.info(
-            "PARTIAL_SELL confirmed: %s %.4f (%.0f%%) @ $%.2f, P&L=$%.2f",
-            symbol, sell_qty, sell_pct * 100, exit_price, realized_pnl,
+            "PARTIAL_SELL confirmed: %s %.4f (%.0f%%) @ $%.2f, P&L=$%.2f, tp_level=%d",
+            symbol, sell_qty, sell_pct * 100, exit_price, realized_pnl, tp_level,
         )
         return True, (
             f"Sold {sell_pct*100:.0f}% of {symbol} ({sell_qty:.6f} units) "
             f"@ ${exit_price:.2f}, P&L: ${realized_pnl:.2f}"
         )
+
+    def update_peak_prices(self, prices: dict[str, float]) -> None:
+        for p in self.positions:
+            if p.status == "open" and p.symbol in prices:
+                p.update_peak_price(prices[p.symbol])
 
     def get_open_positions(self) -> list[dict]:
         return [p.to_dict() for p in self.positions if p.status == "open"]

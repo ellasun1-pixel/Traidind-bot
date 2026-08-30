@@ -34,6 +34,12 @@ class TradeSignal:
     distance_to_win: float = 0.0
     distance_to_loss: float = 0.0
     provider: str = ""
+    sell_pct: float = 1.0
+    sell_quantity: float = 0.0
+    keep_quantity: float = 0.0
+    trailing_stop_price: float = 0.0
+    position_quantity: float = 0.0
+    profit_pct: float = 0.0
 
 
 class StrategyEngine:
@@ -50,6 +56,7 @@ class StrategyEngine:
         open_positions: list[dict],
         total_open_risk_usd: float,
         available_cash: float | None = None,
+        active_mode: str = "PAPER_CHALLENGE",
     ) -> TradeSignal:
         if daily_df.empty or len(daily_df) < 200:
             return self._no_trade(symbol, MarketRegime.CHOP, portfolio_balance, "Insufficient data")
@@ -75,11 +82,18 @@ class StrategyEngine:
         if sell_signal:
             return sell_signal
 
-        tp_signal = self._check_take_profit(
-            symbol, regime, current_price, existing, portfolio_balance
-        )
-        if tp_signal:
-            return tp_signal
+        if active_mode == "LIVE_FUNDED":
+            live_signal = self._check_live_funded_exits(
+                symbol, regime, current_price, existing, portfolio_balance,
+            )
+            if live_signal:
+                return live_signal
+        else:
+            tp_signal = self._check_take_profit(
+                symbol, regime, current_price, existing, portfolio_balance
+            )
+            if tp_signal:
+                return tp_signal
 
         cash = available_cash if available_cash is not None else portfolio_balance
         buy_signal = self._check_buy_conditions(
@@ -217,6 +231,111 @@ class StrategyEngine:
                     distance_to_win=settings.win_level - balance,
                     distance_to_loss=balance - settings.loss_level,
                 )
+        return None
+
+    def _check_live_funded_exits(
+        self,
+        symbol: str,
+        regime: MarketRegime,
+        current_price: float,
+        existing: list[dict],
+        balance: float,
+    ) -> Optional[TradeSignal]:
+        if not existing:
+            return None
+
+        for pos in existing:
+            entry = pos.get("entry_price", 0)
+            quantity = pos.get("quantity", 0)
+            peak_price = pos.get("peak_price", current_price)
+            tp1_fired = pos.get("tp1_fired", False)
+            tp2_fired = pos.get("tp2_fired", False)
+
+            if entry <= 0 or quantity <= 0:
+                continue
+
+            profit_pct = (current_price - entry) / entry
+            position_value = quantity * current_price
+
+            if not tp1_fired and profit_pct >= settings.live_tp1_pct:
+                sell_qty = round(quantity * settings.live_tp1_sell_pct, 8)
+                keep_qty = round(quantity - sell_qty, 8)
+                sell_usd = sell_qty * current_price
+                return TradeSignal(
+                    signal_type="REDUCE",
+                    priority="HIGH",
+                    asset_symbol=symbol,
+                    regime=regime,
+                    entry_price=current_price,
+                    position_size_usd=round(sell_usd, 2),
+                    reason=f"Profit +{profit_pct*100:.1f}% — partial take-profit level 1",
+                    explanation=(
+                        f"Price rose {profit_pct*100:.1f}% from entry ${entry:.2f}. "
+                        f"Sell {settings.live_tp1_sell_pct*100:.0f}% to lock in gains, "
+                        f"keep {keep_qty:.6f} {symbol.split('/')[0]} running"
+                    ),
+                    current_balance=balance,
+                    distance_to_win=round(settings.win_level - balance, 2),
+                    distance_to_loss=round(balance - settings.loss_level, 2),
+                    sell_pct=settings.live_tp1_sell_pct,
+                    sell_quantity=sell_qty,
+                    keep_quantity=keep_qty,
+                    position_quantity=quantity,
+                    profit_pct=round(profit_pct * 100, 1),
+                )
+
+            if tp1_fired and not tp2_fired and profit_pct >= settings.live_tp2_pct:
+                sell_qty = round(quantity * settings.live_tp2_sell_pct, 8)
+                keep_qty = round(quantity - sell_qty, 8)
+                sell_usd = sell_qty * current_price
+                return TradeSignal(
+                    signal_type="REDUCE",
+                    priority="HIGH",
+                    asset_symbol=symbol,
+                    regime=regime,
+                    entry_price=current_price,
+                    position_size_usd=round(sell_usd, 2),
+                    reason=f"Profit +{profit_pct*100:.1f}% — partial take-profit level 2",
+                    explanation=(
+                        f"Price rose {profit_pct*100:.1f}% from entry ${entry:.2f}. "
+                        f"Sell another {settings.live_tp2_sell_pct*100:.0f}% to lock in more gains, "
+                        f"keep {keep_qty:.6f} {symbol.split('/')[0]} with trailing stop"
+                    ),
+                    current_balance=balance,
+                    distance_to_win=round(settings.win_level - balance, 2),
+                    distance_to_loss=round(balance - settings.loss_level, 2),
+                    sell_pct=settings.live_tp2_sell_pct,
+                    sell_quantity=sell_qty,
+                    keep_quantity=keep_qty,
+                    position_quantity=quantity,
+                    profit_pct=round(profit_pct * 100, 1),
+                )
+
+            if profit_pct >= settings.live_trailing_activate_pct and peak_price > 0:
+                trailing_stop = peak_price * (1 - settings.live_trailing_stop_pct)
+                if current_price <= trailing_stop:
+                    return TradeSignal(
+                        signal_type="SELL",
+                        priority="CRITICAL",
+                        asset_symbol=symbol,
+                        regime=regime,
+                        entry_price=current_price,
+                        reason=(
+                            f"Trailing stop hit — peak ${peak_price:.2f}, "
+                            f"stop ${trailing_stop:.2f}, current ${current_price:.2f}"
+                        ),
+                        explanation=(
+                            f"Price dropped {settings.live_trailing_stop_pct*100:.0f}% "
+                            f"from peak ${peak_price:.2f}. Sell remaining position to protect profits"
+                        ),
+                        current_balance=balance,
+                        distance_to_win=round(settings.win_level - balance, 2),
+                        distance_to_loss=round(balance - settings.loss_level, 2),
+                        trailing_stop_price=round(trailing_stop, 2),
+                        position_quantity=quantity,
+                        profit_pct=round(profit_pct * 100, 1),
+                    )
+
         return None
 
     def _check_buy_conditions(

@@ -70,7 +70,16 @@ class SignalFormatter:
                 lines.append(f"Take Profit: ${take_profit:.2f}")
                 lines.append(f"Risk/Reward: 1:{rr:.1f}")
 
-        if signal.position_size_usd:
+        if signal.signal_type == "REDUCE" and signal.sell_quantity > 0:
+            ticker = signal.asset_symbol.split("/")[0]
+            lines.append(f"Position: {signal.position_quantity:.6f} {ticker}")
+            lines.append(f"Sell: {signal.sell_quantity:.6f} {ticker} ({signal.sell_pct*100:.0f}%)")
+            lines.append(f"Sell Value: ${signal.position_size_usd:.2f}")
+            lines.append(f"Keep: {signal.keep_quantity:.6f} {ticker}")
+            lines.append(f"Profit: +{signal.profit_pct:.1f}%")
+            if signal.trailing_stop_price:
+                lines.append(f"Trailing Stop: ${signal.trailing_stop_price:.2f}")
+        elif signal.position_size_usd:
             lines.append(f"Suggested Size: ${signal.position_size_usd:.2f}")
         if signal.max_loss_usd:
             lines.append(f"Max Possible Loss: ${signal.max_loss_usd:.2f}")

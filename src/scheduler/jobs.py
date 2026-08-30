@@ -237,6 +237,8 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
     prices[asset.symbol] = safety.current_price
     equity = portfolio.get_total_equity(prices)
 
+    portfolio.update_peak_prices(prices)
+
     signal = engine.analyze(
         symbol=asset.symbol,
         daily_df=safety.daily_df,
@@ -246,6 +248,7 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
         open_positions=open_positions,
         total_open_risk_usd=total_risk,
         available_cash=portfolio.balance_usd,
+        active_mode=_active_mode,
     )
     signal.provider = safety.provider_used
 
@@ -291,6 +294,18 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
                 asset.symbol, existing.signal_type, signal.signal_type, existing.id,
             )
 
+        snapshot = None
+        if signal.sell_pct < 1.0 and signal.signal_type == "REDUCE":
+            tp_level = 1 if "level 1" in signal.reason else (2 if "level 2" in signal.reason else 0)
+            snapshot = {
+                "sell_pct": signal.sell_pct,
+                "tp_level": tp_level,
+                "sell_quantity": signal.sell_quantity,
+                "keep_quantity": signal.keep_quantity,
+                "position_quantity": signal.position_quantity,
+                "profit_pct": signal.profit_pct,
+            }
+
         lifecycle.create_signal(
             asset_id=asset_id,
             signal_type=signal.signal_type,
@@ -310,6 +325,7 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
             price_range_high=signal.price_range_high or None,
             previous_signal_id=previous_signal_id,
             supersede_previous=True,
+            market_snapshot=snapshot,
         )
         if previous_signal_id:
             result["status"] = "superseded_previous"

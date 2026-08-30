@@ -75,6 +75,13 @@ class AppSettings(BaseSettings):
 
     take_profit_risk_multiple: float = 2.0
 
+    live_tp1_pct: float = 0.15
+    live_tp1_sell_pct: float = 0.30
+    live_tp2_pct: float = 0.40
+    live_tp2_sell_pct: float = 0.30
+    live_trailing_stop_pct: float = 0.12
+    live_trailing_activate_pct: float = 0.15
+
     assets: list[AssetConfig] = Field(default_factory=list)
 
     model_config = {"env_prefix": "", "case_sensitive": False}
