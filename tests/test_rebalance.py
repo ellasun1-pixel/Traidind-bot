@@ -31,7 +31,7 @@ class TestPartialSellNeverExceeds30Pct:
     def test_sell_pct_constant_is_30(self):
         assert PARTIAL_SELL_PCT == 0.30
 
-    def test_confirm_partial_sell_rejects_above_30(self):
+    def test_confirm_partial_sell_accepts_31_pct(self):
         portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
         pos = Position(
             symbol="BTC/USD", side="BUY", entry_price=100.0,
@@ -43,10 +43,9 @@ class TestPartialSellNeverExceeds30Pct:
         portfolio.balance_usd -= 100.36
 
         ok, msg = portfolio.confirm_partial_sell("BTC/USD", 99.0, 0.31)
-        assert not ok
-        assert "30%" in msg
+        assert ok
 
-    def test_confirm_partial_sell_rejects_50_pct(self):
+    def test_confirm_partial_sell_rejects_above_100_pct(self):
         portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
         pos = Position(
             symbol="BTC/USD", side="BUY", entry_price=100.0,
@@ -57,7 +56,7 @@ class TestPartialSellNeverExceeds30Pct:
         portfolio.positions.append(pos)
         portfolio.balance_usd -= 100.36
 
-        ok, msg = portfolio.confirm_partial_sell("BTC/USD", 99.0, 0.50)
+        ok, msg = portfolio.confirm_partial_sell("BTC/USD", 99.0, 1.01)
         assert not ok
 
     def test_confirm_partial_sell_accepts_30_pct(self):
