@@ -66,7 +66,7 @@ class Signal(Base):
     id = Column(String(36), primary_key=True, default=_genuuid)
     asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
     strategy_version = Column(String(20), nullable=False, default="1.0")
-    signal_type = Column(String(20), nullable=False)
+    signal_type = Column(String(30), nullable=False)
     priority = Column(String(10), nullable=False, default="normal")
     regime = Column(String(20), nullable=False)
     entry_price = Column(Numeric(18, 8))

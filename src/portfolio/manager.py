@@ -261,7 +261,7 @@ class PaperPortfolio:
         elif tp_level == 2:
             pos.tp2_fired = True
 
-        self.balance_usd += proceeds
+        self.balance_usd += proceeds - exit_commission
         self.realized_pnl_total += realized_pnl
         self._update_challenge_status(prices or {})
 
@@ -322,8 +322,8 @@ class PaperPortfolio:
                 if price is None:
                     price = p.entry_price
                     if prices:
-                        logger.debug(
-                            "No live price for %s, using entry_price $%.2f for equity calc",
+                        logger.warning(
+                            "STALE_EQUITY: No live price for %s, using entry_price $%.2f for equity calc",
                             p.symbol, price,
                         )
                 position_value += price * p.quantity
@@ -435,7 +435,7 @@ class PaperPortfolio:
         try:
             with get_session() as session:
                 repo = PositionRepository(session)
-                open_positions = repo.get_open()
+                open_positions = repo.get_open(agent_mode=self.mode)
                 if not open_positions:
                     return
                 for db_pos in open_positions:
@@ -494,11 +494,11 @@ class PaperPortfolio:
                 logger.warning("Asset %s not found in DB, skipping position persist", pos.symbol)
                 return
             repo = PositionRepository(session)
-            existing_open = repo.get_open(asset_id=asset.id)
+            existing_open = repo.get_open(asset_id=asset.id, agent_mode=self.mode)
             if existing_open:
                 logger.error(
-                    "DB already has %d open position(s) for %s — closing stale rows before persisting new BUY",
-                    len(existing_open), pos.symbol,
+                    "DB already has %d open position(s) for %s in mode %s — closing stale rows before persisting new BUY",
+                    len(existing_open), pos.symbol, self.mode,
                 )
                 for stale in existing_open:
                     repo.close(stale, pos.entry_price, 0.0, "duplicate_cleanup")
@@ -528,7 +528,11 @@ class PaperPortfolio:
             else:
                 open_db = (
                     session.query(PaperPosition)
-                    .filter(PaperPosition.asset_id == asset.id, PaperPosition.is_open.is_(True))
+                    .filter(
+                        PaperPosition.asset_id == asset.id,
+                        PaperPosition.is_open.is_(True),
+                        PaperPosition.agent_mode == self.mode,
+                    )
                     .all()
                 )
                 repo = PositionRepository(session)
@@ -686,6 +690,7 @@ class PaperPortfolio:
 
                 latest_snap = (
                     session.query(PortfolioSnapshot)
+                    .filter(PortfolioSnapshot.agent_mode == mode)
                     .order_by(PortfolioSnapshot.created_at.desc())
                     .first()
                 )
