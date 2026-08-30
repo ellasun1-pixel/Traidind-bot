@@ -382,9 +382,11 @@ class DailySnapshotRepository:
     def save_snapshot(self, snapshot_date: date, balance_usd: float,
                       realized_pnl: float, unrealized_pnl: float,
                       open_positions_count: int, challenge_status: str,
-                      peak_balance: float) -> DailySnapshot:
+                      peak_balance: float,
+                      agent_mode: str = "PAPER_CHALLENGE") -> DailySnapshot:
         existing = self.session.query(DailySnapshot).filter(
-            DailySnapshot.snapshot_date == snapshot_date
+            DailySnapshot.snapshot_date == snapshot_date,
+            DailySnapshot.agent_mode == agent_mode,
         ).first()
         if existing:
             existing.balance_usd = balance_usd
@@ -398,6 +400,7 @@ class DailySnapshotRepository:
 
         snapshot = DailySnapshot(
             snapshot_date=snapshot_date,
+            agent_mode=agent_mode,
             balance_usd=balance_usd,
             realized_pnl=realized_pnl,
             unrealized_pnl=unrealized_pnl,

@@ -248,7 +248,8 @@ class DailySnapshot(Base):
     __tablename__ = "daily_snapshots"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    snapshot_date = Column(Date, nullable=False, unique=True)
+    snapshot_date = Column(Date, nullable=False)
+    agent_mode = Column(String(20), nullable=False, default="PAPER_CHALLENGE")
     balance_usd = Column(Numeric(12, 2), nullable=False)
     realized_pnl = Column(Numeric(12, 2), nullable=False)
     unrealized_pnl = Column(Numeric(12, 2), nullable=False)
@@ -257,6 +258,10 @@ class DailySnapshot(Base):
     peak_balance = Column(Numeric(12, 2), nullable=False)
     strategy_version = Column(String(20), nullable=False, default="1.0")
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("snapshot_date", "agent_mode", name="uq_daily_snapshot_date_mode"),
+    )
 
 
 class PortfolioSnapshot(Base):
