@@ -60,26 +60,19 @@ class PaperAccountRepository:
             starting_balance = settings.starting_balance
         account = self.session.query(PaperAccount).filter(PaperAccount.agent_mode == mode).first()
         if account is None:
-            any_account = self.session.query(PaperAccount).first()
-            if any_account is not None:
-                logger.error(
-                    "ACCOUNT_MODE_MISMATCH: no account with agent_mode=%r, "
-                    "but found account id=%s with agent_mode=%r (len=%d) — fixing",
-                    mode, any_account.id, any_account.agent_mode,
-                    len(any_account.agent_mode) if any_account.agent_mode else -1,
-                )
-                any_account.agent_mode = mode
-                self.session.flush()
-                account = any_account
-            else:
-                account = PaperAccount(
-                    agent_mode=mode,
-                    balance_usd=starting_balance,
-                    peak_balance=starting_balance,
-                    starting_balance=starting_balance,
-                )
-                self.session.add(account)
-                self.session.flush()
+            logger.warning(
+                "NO_ACCOUNT_FOUND: creating new PaperAccount with default balance=$%.2f mode=%r "
+                "— if this is unexpected, the DB may have been reset or migrated",
+                starting_balance, mode,
+            )
+            account = PaperAccount(
+                agent_mode=mode,
+                balance_usd=starting_balance,
+                peak_balance=starting_balance,
+                starting_balance=starting_balance,
+            )
+            self.session.add(account)
+            self.session.flush()
         return account
 
     def update_balance(self, account: PaperAccount, new_balance: float):
@@ -163,10 +156,12 @@ class PositionRepository:
         self.session.flush()
         return position
 
-    def get_open(self, asset_id: int = None) -> list[PaperPosition]:
+    def get_open(self, asset_id: int = None, agent_mode: str = None) -> list[PaperPosition]:
         query = self.session.query(PaperPosition).filter(PaperPosition.is_open.is_(True))
         if asset_id is not None:
             query = query.filter(PaperPosition.asset_id == asset_id)
+        if agent_mode is not None:
+            query = query.filter(PaperPosition.agent_mode == agent_mode)
         return query.all()
 
     def get_open_count(self) -> int:
@@ -387,9 +382,11 @@ class DailySnapshotRepository:
     def save_snapshot(self, snapshot_date: date, balance_usd: float,
                       realized_pnl: float, unrealized_pnl: float,
                       open_positions_count: int, challenge_status: str,
-                      peak_balance: float) -> DailySnapshot:
+                      peak_balance: float,
+                      agent_mode: str = "PAPER_CHALLENGE") -> DailySnapshot:
         existing = self.session.query(DailySnapshot).filter(
-            DailySnapshot.snapshot_date == snapshot_date
+            DailySnapshot.snapshot_date == snapshot_date,
+            DailySnapshot.agent_mode == agent_mode,
         ).first()
         if existing:
             existing.balance_usd = balance_usd
@@ -403,6 +400,7 @@ class DailySnapshotRepository:
 
         snapshot = DailySnapshot(
             snapshot_date=snapshot_date,
+            agent_mode=agent_mode,
             balance_usd=balance_usd,
             realized_pnl=realized_pnl,
             unrealized_pnl=unrealized_pnl,

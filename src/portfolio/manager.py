@@ -261,9 +261,14 @@ class PaperPortfolio:
         elif tp_level == 2:
             pos.tp2_fired = True
 
-        self.balance_usd += proceeds
+        self.balance_usd += proceeds - exit_commission
         self.realized_pnl_total += realized_pnl
         self._update_challenge_status(prices or {})
+
+        try:
+            self._persist_partial_sell(pos, sell_qty, exit_price, realized_pnl, signal_id)
+        except Exception as e:
+            logger.error("Failed to persist PARTIAL_SELL to DB: %s", e)
 
         logger.info(
             "PARTIAL_SELL confirmed: %s %.4f (%.0f%%) @ $%.2f, P&L=$%.2f, tp_level=%d",
@@ -275,9 +280,22 @@ class PaperPortfolio:
         )
 
     def update_peak_prices(self, prices: dict[str, float]) -> None:
+        updated_ids = []
         for p in self.positions:
             if p.status == "open" and p.symbol in prices:
+                old_peak = p.peak_price
                 p.update_peak_price(prices[p.symbol])
+                if p.peak_price != old_peak and hasattr(p, "_db_position_id") and p._db_position_id:
+                    updated_ids.append((p._db_position_id, p.peak_price))
+        if updated_ids:
+            try:
+                with get_session() as session:
+                    for pos_id, peak in updated_ids:
+                        db_pos = session.get(PaperPosition, pos_id)
+                        if db_pos:
+                            db_pos.peak_price = peak
+            except Exception as e:
+                logger.error("Failed to persist peak_price updates: %s", e)
 
     def get_open_positions(self) -> list[dict]:
         return [p.to_dict() for p in self.positions if p.status == "open"]
@@ -297,11 +315,18 @@ class PaperPortfolio:
         return total
 
     def get_total_equity(self, prices: dict[str, float]) -> float:
-        position_value = sum(
-            prices.get(p.symbol, p.entry_price) * p.quantity
-            for p in self.positions
-            if p.status == "open"
-        )
+        position_value = 0.0
+        for p in self.positions:
+            if p.status == "open":
+                price = prices.get(p.symbol)
+                if price is None:
+                    price = p.entry_price
+                    if prices:
+                        logger.warning(
+                            "STALE_EQUITY: No live price for %s, using entry_price $%.2f for equity calc",
+                            p.symbol, price,
+                        )
+                position_value += price * p.quantity
         return self.balance_usd + position_value
 
     def get_drawdown(self, prices: dict[str, float]) -> float:
@@ -410,7 +435,7 @@ class PaperPortfolio:
         try:
             with get_session() as session:
                 repo = PositionRepository(session)
-                open_positions = repo.get_open()
+                open_positions = repo.get_open(agent_mode=self.mode)
                 if not open_positions:
                     return
                 for db_pos in open_positions:
@@ -469,11 +494,11 @@ class PaperPortfolio:
                 logger.warning("Asset %s not found in DB, skipping position persist", pos.symbol)
                 return
             repo = PositionRepository(session)
-            existing_open = repo.get_open(asset_id=asset.id)
+            existing_open = repo.get_open(asset_id=asset.id, agent_mode=self.mode)
             if existing_open:
                 logger.error(
-                    "DB already has %d open position(s) for %s — closing stale rows before persisting new BUY",
-                    len(existing_open), pos.symbol,
+                    "DB already has %d open position(s) for %s in mode %s — closing stale rows before persisting new BUY",
+                    len(existing_open), pos.symbol, self.mode,
                 )
                 for stale in existing_open:
                     repo.close(stale, pos.entry_price, 0.0, "duplicate_cleanup")
@@ -485,6 +510,7 @@ class PaperPortfolio:
                 quantity=pos.quantity,
                 entry_price=pos.entry_price,
                 stop_loss=pos.stop_loss,
+                peak_price=pos.peak_price,
             )
             pos._db_position_id = db_pos.id
 
@@ -492,6 +518,7 @@ class PaperPortfolio:
         with get_session() as session:
             asset = session.query(Asset).filter(Asset.symbol == pos.symbol).first()
             if not asset:
+                logger.warning("Asset %s not found in DB, skipping sell persist", pos.symbol)
                 return
             if hasattr(pos, "_db_position_id") and pos._db_position_id:
                 db_pos = session.get(PaperPosition, pos._db_position_id)
@@ -501,7 +528,11 @@ class PaperPortfolio:
             else:
                 open_db = (
                     session.query(PaperPosition)
-                    .filter(PaperPosition.asset_id == asset.id, PaperPosition.is_open.is_(True))
+                    .filter(
+                        PaperPosition.asset_id == asset.id,
+                        PaperPosition.is_open.is_(True),
+                        PaperPosition.agent_mode == self.mode,
+                    )
                     .all()
                 )
                 repo = PositionRepository(session)
@@ -531,6 +562,37 @@ class PaperPortfolio:
                 account.daily_loss = float(account.daily_loss) + abs(pnl)
                 session.flush()
 
+    def _persist_partial_sell(
+        self, pos: Position, sell_qty: float, exit_price: float,
+        realized_pnl: float, signal_id: int | str | None,
+    ) -> None:
+        with get_session() as session:
+            asset = session.query(Asset).filter(Asset.symbol == pos.symbol).first()
+            if not asset:
+                logger.warning("Asset %s not found in DB, skipping partial sell persist", pos.symbol)
+                return
+            if hasattr(pos, "_db_position_id") and pos._db_position_id:
+                db_pos = session.get(PaperPosition, pos._db_position_id)
+                if db_pos:
+                    db_pos.quantity = float(pos.quantity)
+                    db_pos.tp1_fired = pos.tp1_fired
+                    db_pos.tp2_fired = pos.tp2_fired
+                    db_pos.peak_price = pos.peak_price
+            trade_repo = TradeHistoryRepository(session)
+            trade_repo.create(
+                position_id=getattr(pos, "_db_position_id", None),
+                asset_id=asset.id,
+                signal_id=str(signal_id) if signal_id else None,
+                side="BUY",
+                quantity=sell_qty,
+                entry_price=pos.entry_price,
+                exit_price=exit_price,
+                realized_pnl=round(realized_pnl, 2),
+                entry_time=pos.opened_at,
+                exit_time=datetime.now(timezone.utc),
+                close_reason="partial_tp",
+            )
+
     @classmethod
     def restore_from_db(cls, mode: str = "PAPER_CHALLENGE") -> "PaperPortfolio":
         portfolio = cls(mode=mode)
@@ -558,15 +620,11 @@ class PaperPortfolio:
                             (op.id, op.asset.symbol, repr(op.agent_mode), len(op.agent_mode) if op.agent_mode else -1)
                             for op in all_open_any
                         ]
-                        logger.error(
-                            "MODE_MISMATCH: filter mode=%r found 0 positions, "
-                            "but %d exist unfiltered: %s — adopting them and fixing mode",
+                        logger.warning(
+                            "MODE_MISMATCH: filter mode=%r found 0 open positions, "
+                            "but %d exist in other modes: %s — NOT adopting, they belong to other modes",
                             mode, len(all_open_any), mode_values,
                         )
-                        for op in all_open_any:
-                            op.agent_mode = mode
-                        session.flush()
-                        all_open = all_open_any
 
                 seen_symbols: set[str] = set()
                 open_positions: list[PaperPosition] = []
@@ -624,17 +682,15 @@ class PaperPortfolio:
                         .all()
                     )
                     if closed_any:
-                        logger.error(
-                            "MODE_MISMATCH: %d closed positions found without mode filter — fixing",
+                        logger.warning(
+                            "MODE_MISMATCH: %d closed positions found in other modes — "
+                            "NOT adopting, they belong to other modes",
                             len(closed_any),
                         )
-                        for cp in closed_any:
-                            cp.agent_mode = mode
-                        session.flush()
-                        closed_positions = closed_any
 
                 latest_snap = (
                     session.query(PortfolioSnapshot)
+                    .filter(PortfolioSnapshot.agent_mode == mode)
                     .order_by(PortfolioSnapshot.created_at.desc())
                     .first()
                 )
@@ -698,6 +754,10 @@ class PaperPortfolio:
                     )
                     open_pos._db_position_id = op.id
                     open_pos.opened_at = op.opened_at or datetime.now(timezone.utc)
+                    if op.peak_price is not None:
+                        open_pos.peak_price = float(op.peak_price)
+                    open_pos.tp1_fired = bool(op.tp1_fired)
+                    open_pos.tp2_fired = bool(op.tp2_fired)
                     portfolio.positions.append(open_pos)
 
                 portfolio.balance_usd = round(balance, 2)

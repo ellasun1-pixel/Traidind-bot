@@ -563,7 +563,7 @@ class TestCommandRegistration:
                 "settings", "auth", "scheduler", "health", "debug",
                 "reset_challenge", "new_challenge", "rebalance_suggestion",
                 "manual_buy", "manual_sell",
-                "switch_mode", "sync_portfolio",
+                "switch_mode", "sync_portfolio", "calendar",
             }
             assert expected == commands, f"Missing: {expected - commands}, Extra: {commands - expected}"
 
@@ -901,13 +901,14 @@ class TestHealthTransitions:
 # ── Scheduler ──────────────────────────────────────────────────
 
 class TestSchedulerConfig:
-    def test_six_jobs_registered(self):
+    def test_eight_jobs_registered(self):
         from src.scheduler.jobs import setup_scheduler
         scheduler = setup_scheduler()
         jobs = scheduler.get_jobs()
         job_ids = {j.id for j in jobs}
         expected = {"market_check", "expire_signals", "morning_report",
-                    "evening_report", "health_heartbeat", "health_check"}
+                    "evening_report", "health_heartbeat", "health_check",
+                    "calendar_refresh", "calendar_alert"}
         assert job_ids == expected
 
     def test_all_jobs_have_misfire_grace(self):

@@ -165,6 +165,7 @@ async def test_cmd_confirm_handles_expired_signal_gracefully(mock_update, mock_c
 
     mock_sig = MagicMock()
     mock_sig.id = "test-sig-1"
+    mock_sig.status = "pending"
     mock_sig.signal_type = "BUY"
     mock_sig.asset.symbol = "BTC/USD"
     mock_sig.entry_price = 50000.0
@@ -194,7 +195,8 @@ async def test_cmd_confirm_handles_expired_signal_gracefully(mock_update, mock_c
         await cmd_confirm(mock_update, mock_context)
 
     text = mock_update.message.reply_text.call_args_list[-1][0][0]
-    assert "expired" in text.lower() or "⚠️" in text
+    assert "already processed" in text.lower() or "⚠️" in text
+    mock_portfolio.confirm_buy.assert_not_called()
 
 
 @pytest.mark.asyncio

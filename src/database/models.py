@@ -66,7 +66,7 @@ class Signal(Base):
     id = Column(String(36), primary_key=True, default=_genuuid)
     asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
     strategy_version = Column(String(20), nullable=False, default="1.0")
-    signal_type = Column(String(20), nullable=False)
+    signal_type = Column(String(30), nullable=False)
     priority = Column(String(10), nullable=False, default="normal")
     regime = Column(String(20), nullable=False)
     entry_price = Column(Numeric(18, 8))
@@ -135,6 +135,9 @@ class PaperPosition(Base):
     realized_pnl = Column(Numeric(12, 2))
     close_reason = Column(String(20))
     is_open = Column(Boolean, nullable=False, default=True)
+    peak_price = Column(Numeric(18, 8))
+    tp1_fired = Column(Boolean, nullable=False, default=False)
+    tp2_fired = Column(Boolean, nullable=False, default=False)
 
     asset = relationship("Asset", back_populates="positions")
     signal = relationship("Signal", back_populates="position")
@@ -245,7 +248,8 @@ class DailySnapshot(Base):
     __tablename__ = "daily_snapshots"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    snapshot_date = Column(Date, nullable=False, unique=True)
+    snapshot_date = Column(Date, nullable=False)
+    agent_mode = Column(String(20), nullable=False, default="PAPER_CHALLENGE")
     balance_usd = Column(Numeric(12, 2), nullable=False)
     realized_pnl = Column(Numeric(12, 2), nullable=False)
     unrealized_pnl = Column(Numeric(12, 2), nullable=False)
@@ -254,6 +258,10 @@ class DailySnapshot(Base):
     peak_balance = Column(Numeric(12, 2), nullable=False)
     strategy_version = Column(String(20), nullable=False, default="1.0")
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("snapshot_date", "agent_mode", name="uq_daily_snapshot_date_mode"),
+    )
 
 
 class PortfolioSnapshot(Base):
@@ -268,4 +276,24 @@ class PortfolioSnapshot(Base):
     open_positions_count = Column(Integer, nullable=False, default=0)
     open_positions_summary = Column(JSON)
     challenge_status = Column(String(10), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
+class CalendarEvent(Base):
+    __tablename__ = "calendar_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    unique_key = Column(String(120), nullable=False, unique=True)
+    title = Column(String(200), nullable=False)
+    event_time = Column(DateTime(timezone=True), nullable=False)
+    category = Column(String(20), nullable=False)
+    source = Column(String(30), nullable=False)
+    impact = Column(String(10), nullable=False, default="medium")
+    currency = Column(String(10), default="USD")
+    asset_symbol = Column(String(20))
+    description = Column(Text)
+    forecast = Column(String(50))
+    previous = Column(String(50))
+    alerted_24h = Column(Boolean, nullable=False, default=False)
+    alerted_1h = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)

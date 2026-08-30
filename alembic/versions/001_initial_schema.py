@@ -217,7 +217,7 @@ def upgrade() -> None:
             ('LTC/USD', 'XLTCZUSD', 'LTC-USD', 0.003, 150.0, 0.03)
     """)
 
-    # Create initial paper account with $1000 starting balance
+    # Create initial paper account with $10,000 starting balance
     op.execute("""
         INSERT INTO paper_account (balance_usd, peak_balance, starting_balance, strategy_version)
         VALUES (10000.00, 10000.00, 10000.00, '1.0')
