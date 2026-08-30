@@ -265,6 +265,11 @@ class PaperPortfolio:
         self.realized_pnl_total += realized_pnl
         self._update_challenge_status(prices or {})
 
+        try:
+            self._persist_partial_sell(pos, sell_qty, exit_price, realized_pnl, signal_id)
+        except Exception as e:
+            logger.error("Failed to persist PARTIAL_SELL to DB: %s", e)
+
         logger.info(
             "PARTIAL_SELL confirmed: %s %.4f (%.0f%%) @ $%.2f, P&L=$%.2f, tp_level=%d",
             symbol, sell_qty, sell_pct * 100, exit_price, realized_pnl, tp_level,
@@ -492,6 +497,7 @@ class PaperPortfolio:
         with get_session() as session:
             asset = session.query(Asset).filter(Asset.symbol == pos.symbol).first()
             if not asset:
+                logger.warning("Asset %s not found in DB, skipping sell persist", pos.symbol)
                 return
             if hasattr(pos, "_db_position_id") and pos._db_position_id:
                 db_pos = session.get(PaperPosition, pos._db_position_id)
@@ -531,6 +537,34 @@ class PaperPortfolio:
                 account.daily_loss = float(account.daily_loss) + abs(pnl)
                 session.flush()
 
+    def _persist_partial_sell(
+        self, pos: Position, sell_qty: float, exit_price: float,
+        realized_pnl: float, signal_id: int | str | None,
+    ) -> None:
+        with get_session() as session:
+            asset = session.query(Asset).filter(Asset.symbol == pos.symbol).first()
+            if not asset:
+                logger.warning("Asset %s not found in DB, skipping partial sell persist", pos.symbol)
+                return
+            if hasattr(pos, "_db_position_id") and pos._db_position_id:
+                db_pos = session.get(PaperPosition, pos._db_position_id)
+                if db_pos:
+                    db_pos.quantity = float(pos.quantity)
+            trade_repo = TradeHistoryRepository(session)
+            trade_repo.create(
+                position_id=getattr(pos, "_db_position_id", None),
+                asset_id=asset.id,
+                signal_id=str(signal_id) if signal_id else None,
+                side="BUY",
+                quantity=sell_qty,
+                entry_price=pos.entry_price,
+                exit_price=exit_price,
+                realized_pnl=round(realized_pnl, 2),
+                entry_time=pos.opened_at,
+                exit_time=datetime.now(timezone.utc),
+                close_reason="partial_tp",
+            )
+
     @classmethod
     def restore_from_db(cls, mode: str = "PAPER_CHALLENGE") -> "PaperPortfolio":
         portfolio = cls(mode=mode)
@@ -558,15 +592,11 @@ class PaperPortfolio:
                             (op.id, op.asset.symbol, repr(op.agent_mode), len(op.agent_mode) if op.agent_mode else -1)
                             for op in all_open_any
                         ]
-                        logger.error(
-                            "MODE_MISMATCH: filter mode=%r found 0 positions, "
-                            "but %d exist unfiltered: %s — adopting them and fixing mode",
+                        logger.warning(
+                            "MODE_MISMATCH: filter mode=%r found 0 open positions, "
+                            "but %d exist in other modes: %s — NOT adopting, they belong to other modes",
                             mode, len(all_open_any), mode_values,
                         )
-                        for op in all_open_any:
-                            op.agent_mode = mode
-                        session.flush()
-                        all_open = all_open_any
 
                 seen_symbols: set[str] = set()
                 open_positions: list[PaperPosition] = []
@@ -624,14 +654,11 @@ class PaperPortfolio:
                         .all()
                     )
                     if closed_any:
-                        logger.error(
-                            "MODE_MISMATCH: %d closed positions found without mode filter — fixing",
+                        logger.warning(
+                            "MODE_MISMATCH: %d closed positions found in other modes — "
+                            "NOT adopting, they belong to other modes",
                             len(closed_any),
                         )
-                        for cp in closed_any:
-                            cp.agent_mode = mode
-                        session.flush()
-                        closed_positions = closed_any
 
                 latest_snap = (
                     session.query(PortfolioSnapshot)

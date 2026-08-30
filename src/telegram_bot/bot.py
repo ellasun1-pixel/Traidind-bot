@@ -260,11 +260,21 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             results = []
             challenge_ended = False
             for sig in actionable:
+                if sig.status != "pending":
+                    logger.warning("RACE_GUARD: signal %s already %s, skipping", sig.id, sig.status)
+                    continue
                 symbol = sig.asset.symbol
                 entry_price = float(sig.entry_price) if sig.entry_price else 0.0
                 stop_loss = float(sig.stop_loss) if sig.stop_loss else 0.0
                 position_size = float(sig.position_size_usd) if sig.position_size_usd else 0.0
                 max_loss = float(sig.max_loss_usd) if sig.max_loss_usd else 0.0
+
+                try:
+                    lifecycle.confirm(sig)
+                except InvalidTransitionError as e:
+                    logger.warning("RACE_GUARD: signal %s already transitioned: %s", sig.id, e)
+                    results.append(f"⚠️ {symbol}: Signal already processed (duplicate /confirm blocked)")
+                    continue
 
                 if sig.signal_type == "BUY":
                     ok, msg = portfolio.confirm_buy(
@@ -315,13 +325,6 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     results.append(f"{'✅' if ok else '❌'} {symbol}: {msg}")
                 else:
                     continue
-
-                if ok:
-                    try:
-                        lifecycle.confirm(sig)
-                    except InvalidTransitionError as e:
-                        logger.warning("Signal %s expired mid-confirm: %s", sig.id, e)
-                        results[-1] = f"⚠️ {symbol}: Signal expired before confirmation could complete"
 
                 if not portfolio.is_challenge_active:
                     challenge_ended = True

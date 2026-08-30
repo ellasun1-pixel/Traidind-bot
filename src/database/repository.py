@@ -72,6 +72,11 @@ class PaperAccountRepository:
                 self.session.flush()
                 account = any_account
             else:
+                logger.warning(
+                    "NO_ACCOUNT_FOUND: creating new PaperAccount with default balance=$%.2f mode=%r "
+                    "— if this is unexpected, the DB may have been reset or migrated",
+                    starting_balance, mode,
+                )
                 account = PaperAccount(
                     agent_mode=mode,
                     balance_usd=starting_balance,
