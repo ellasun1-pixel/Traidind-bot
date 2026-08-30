@@ -92,6 +92,7 @@ def record_portfolio_snapshot(trigger: str, prices: dict[str, float] | None = No
                 open_positions_count=len(open_pos),
                 open_positions_summary=open_pos or None,
                 challenge_status=portfolio.challenge_status,
+                agent_mode=_active_mode,
             )
     except Exception as e:
         logger.error("Failed to record portfolio snapshot (%s): %s", trigger, e)
@@ -197,10 +198,11 @@ def _resolve_asset_id(session, symbol: str) -> int | None:
     return None
 
 
-async def _process_single_asset(asset: AssetConfig) -> dict:
+async def _process_single_asset(asset: AssetConfig, cycle_mode: str | None = None) -> dict:
     global _last_signals
     pipeline = get_pipeline()
     engine = _engine or StrategyEngine()
+    mode_for_cycle = cycle_mode or _active_mode
 
     result = {
         "symbol": asset.symbol,
@@ -248,7 +250,7 @@ async def _process_single_asset(asset: AssetConfig) -> dict:
         open_positions=open_positions,
         total_open_risk_usd=total_risk,
         available_cash=portfolio.balance_usd,
-        active_mode=_active_mode,
+        active_mode=mode_for_cycle,
     )
     signal.provider = safety.provider_used
 
@@ -366,6 +368,8 @@ async def market_check_job():
         logger.info("Agent is PAUSED, skipping market check")
         return
 
+    cycle_mode = _active_mode
+
     tz_local = pytz.timezone(settings.timezone)
     current_hour = datetime.now(tz_local).hour
     if current_hour < settings.active_hours_start or current_hour >= settings.active_hours_end:
@@ -393,52 +397,64 @@ async def market_check_job():
     asset_results = []
     errors = []
 
-    active_assets = [a for a in settings.assets if a.active]
-    for i, asset in enumerate(active_assets):
+    try:
+        active_assets = [a for a in settings.assets if a.active]
+        for i, asset in enumerate(active_assets):
+            try:
+                result = await _process_single_asset(asset, cycle_mode=cycle_mode)
+                asset_results.append(result)
+            except Exception as e:
+                logger.error("Error processing %s: %s", asset.symbol, e, exc_info=True)
+                asset_results.append({
+                    "symbol": asset.symbol, "status": "error",
+                    "error": f"{type(e).__name__}: {e}",
+                })
+                errors.append(f"{asset.symbol}: {e}")
+            if i < len(active_assets) - 1:
+                await asyncio.sleep(3.0)
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+
+        ok_count = sum(1 for r in asset_results if r.get("status") == "ok")
+        unsafe_count = sum(1 for r in asset_results if r.get("status") == "data_unsafe")
+        err_count = len(errors)
+
+        with get_session() as session:
+            sched_repo = SchedulerStateRepository(session)
+            if errors and ok_count == 0:
+                sched_repo.mark_failure(
+                    job_name, "; ".join(errors), duration_ms=duration_ms,
+                )
+            elif errors:
+                error_summary = f"{ok_count}/{len(active_assets)} OK; errors: {'; '.join(errors)}"
+                sched_repo.mark_partial_success(
+                    job_name, error_summary, duration_ms=duration_ms,
+                )
+            elif ok_count == 0 and unsafe_count > 0:
+                sched_repo.mark_partial_success(
+                    job_name,
+                    f"0/{len(active_assets)} OK, {unsafe_count} data_unsafe — no signals produced",
+                    duration_ms=duration_ms,
+                )
+            else:
+                sched_repo.mark_success(job_name, duration_ms=duration_ms)
+
+        logger.info(
+            "market_check completed in %dms: %d/%d assets OK, %d data_unsafe, %d errors%s",
+            duration_ms, ok_count, len(active_assets), unsafe_count, err_count,
+            f" — ERRORS: {'; '.join(errors)}" if errors else "",
+        )
+    except Exception as e:
+        logger.critical("market_check_job crashed unexpectedly: %s", e, exc_info=True)
+        duration_ms = int((time.monotonic() - start_time) * 1000)
         try:
-            result = await _process_single_asset(asset)
-            asset_results.append(result)
-        except Exception as e:
-            logger.error("Error processing %s: %s", asset.symbol, e, exc_info=True)
-            asset_results.append({
-                "symbol": asset.symbol, "status": "error",
-                "error": f"{type(e).__name__}: {e}",
-            })
-            errors.append(f"{asset.symbol}: {e}")
-        if i < len(active_assets) - 1:
-            await asyncio.sleep(3.0)
-
-    duration_ms = int((time.monotonic() - start_time) * 1000)
-
-    ok_count = sum(1 for r in asset_results if r.get("status") == "ok")
-    unsafe_count = sum(1 for r in asset_results if r.get("status") == "data_unsafe")
-    err_count = len(errors)
-
-    with get_session() as session:
-        sched_repo = SchedulerStateRepository(session)
-        if errors and ok_count == 0:
-            sched_repo.mark_failure(
-                job_name, "; ".join(errors), duration_ms=duration_ms,
-            )
-        elif errors:
-            error_summary = f"{ok_count}/{len(active_assets)} OK; errors: {'; '.join(errors)}"
-            sched_repo.mark_partial_success(
-                job_name, error_summary, duration_ms=duration_ms,
-            )
-        elif ok_count == 0 and unsafe_count > 0:
-            sched_repo.mark_partial_success(
-                job_name,
-                f"0/{len(active_assets)} OK, {unsafe_count} data_unsafe — no signals produced",
-                duration_ms=duration_ms,
-            )
-        else:
-            sched_repo.mark_success(job_name, duration_ms=duration_ms)
-
-    logger.info(
-        "market_check completed in %dms: %d/%d assets OK, %d data_unsafe, %d errors%s",
-        duration_ms, ok_count, len(active_assets), unsafe_count, err_count,
-        f" — ERRORS: {'; '.join(errors)}" if errors else "",
-    )
+            with get_session() as session:
+                sched_repo = SchedulerStateRepository(session)
+                sched_repo.mark_failure(job_name, f"CRASH: {e}", duration_ms=duration_ms)
+        except Exception:
+            with get_session() as session:
+                sched_repo = SchedulerStateRepository(session)
+                sched_repo.release_lock(job_name)
 
 
 async def expire_signals_job():

@@ -562,9 +562,11 @@ class PortfolioSnapshotRepository:
         open_positions_count: int,
         open_positions_summary: list[dict] | None,
         challenge_status: str,
+        agent_mode: str | None = None,
     ) -> PortfolioSnapshot:
         snap = PortfolioSnapshot(
             trigger=trigger,
+            agent_mode=agent_mode,
             cash_usd=round(cash_usd, 2),
             equity_usd=round(equity_usd, 2),
             realized_pnl=round(realized_pnl, 2),

@@ -440,7 +440,7 @@ class TestMarketCheckJob:
 
         call_count = 0
 
-        async def mock_process(asset):
+        async def mock_process(asset, cycle_mode=None):
             nonlocal call_count
             call_count += 1
             if asset.symbol == "BTC":

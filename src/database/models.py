@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey, UniqueConstraint, Numeric, func, String,
 )
 from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.sql.elements import quoted_name
 
 Base = declarative_base()
 
@@ -46,10 +47,10 @@ class PriceHistory(Base):
     asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
     timeframe = Column(String(10), nullable=False)
     open_time = Column(DateTime(timezone=True), nullable=False)
-    open = Column(Numeric(18, 8), nullable=False)
+    open = Column(quoted_name("open", quote=True), Numeric(18, 8), nullable=False)
     high = Column(Numeric(18, 8), nullable=False)
     low = Column(Numeric(18, 8), nullable=False)
-    close = Column(Numeric(18, 8), nullable=False)
+    close = Column(quoted_name("close", quote=True), Numeric(18, 8), nullable=False)
     volume = Column(Numeric(18, 8), nullable=False)
     source = Column(String(20), nullable=False)
     fetched_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
@@ -160,7 +161,7 @@ class TradeHistory(Base):
 class AppSetting(Base):
     __tablename__ = "app_settings"
 
-    key = Column(String(50), primary_key=True)
+    key = Column(quoted_name("key", quote=True), String(50), primary_key=True)
     value = Column(Text, nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
 
@@ -259,7 +260,8 @@ class PortfolioSnapshot(Base):
     __tablename__ = "portfolio_snapshots"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    trigger = Column(String(30), nullable=False)
+    trigger = Column(quoted_name("trigger", quote=True), String(30), nullable=False)
+    agent_mode = Column(String(20), nullable=True)
     cash_usd = Column(Numeric(12, 2), nullable=False)
     equity_usd = Column(Numeric(12, 2), nullable=False)
     realized_pnl = Column(Numeric(12, 2), nullable=False)
