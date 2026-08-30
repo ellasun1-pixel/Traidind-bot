@@ -49,6 +49,7 @@ class StrategyEngine:
         portfolio_balance: float,
         open_positions: list[dict],
         total_open_risk_usd: float,
+        available_cash: float | None = None,
     ) -> TradeSignal:
         if daily_df.empty or len(daily_df) < 200:
             return self._no_trade(symbol, MarketRegime.CHOP, portfolio_balance, "Insufficient data")
@@ -80,9 +81,11 @@ class StrategyEngine:
         if tp_signal:
             return tp_signal
 
+        cash = available_cash if available_cash is not None else portfolio_balance
         buy_signal = self._check_buy_conditions(
             symbol, regime, latest, prev, current_price, daily,
             portfolio_balance, existing, open_positions, total_open_risk_usd,
+            cash,
         )
         if buy_signal:
             return buy_signal
@@ -228,6 +231,7 @@ class StrategyEngine:
         existing: list[dict],
         all_positions: list[dict],
         total_open_risk_usd: float,
+        available_cash: float | None = None,
     ) -> Optional[TradeSignal]:
         if regime == MarketRegime.PANIC:
             return None
@@ -276,6 +280,8 @@ class StrategyEngine:
         position_value = risk_dollars / stop_distance_pct
         stop_loss_price = current_price * (1 - stop_distance_pct)
 
+        cash = available_cash if available_cash is not None else balance
+
         near_win_level = settings.win_level - 30
         mid_level = settings.starting_balance + 50
         if balance >= near_win_level:
@@ -290,6 +296,10 @@ class StrategyEngine:
         if balance < mid_level:
             max_invested = balance * 0.50
             position_value = min(position_value, max_invested)
+
+        position_value = min(position_value, cash)
+        if position_value < 10:
+            return None
 
         price_range_low = current_price * 0.998
         price_range_high = current_price * 1.002
@@ -309,7 +319,7 @@ class StrategyEngine:
             explanation="Trend looks favorable and risk is managed — consider a small position",
             price_range_low=round(price_range_low, 2),
             price_range_high=round(price_range_high, 2),
-            remaining_usd=round(balance - position_value, 2),
+            remaining_usd=round(cash - position_value, 2),
             current_balance=balance,
             distance_to_win=round(settings.win_level - balance, 2),
             distance_to_loss=round(balance - settings.loss_level, 2),

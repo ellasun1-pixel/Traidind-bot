@@ -403,6 +403,62 @@ class TestEquityBasedDistances:
         assert abs(signal.distance_to_win - (settings.win_level - equity)) < 0.01
         assert abs(signal.distance_to_loss - (equity - settings.loss_level)) < 0.01
 
+    def test_signal_respects_available_cash(self):
+        """After sync with cash=0, engine must not suggest a BUY larger than cash."""
+        import pandas as pd
+        import numpy as np
+
+        portfolio = PaperPortfolio(starting_balance=settings.starting_balance)
+        portfolio.sync_portfolio("ZEC/USD", 12.31281, 0, 840.0)
+        assert portfolio.balance_usd == 0.0
+
+        equity = portfolio.get_total_equity({"ZEC/USD": 840.0})
+        engine = StrategyEngine()
+
+        df = pd.DataFrame({
+            "open": np.random.uniform(49000, 51000, 250),
+            "high": np.random.uniform(49000, 51000, 250),
+            "low": np.random.uniform(49000, 51000, 250),
+            "close": np.random.uniform(49000, 51000, 250),
+            "volume": np.random.uniform(100, 1000, 250),
+        })
+
+        signal = engine.analyze(
+            "LINK/USD", df, df, 15.0,
+            equity, portfolio.get_open_positions(),
+            portfolio.get_total_open_risk(),
+            available_cash=portfolio.balance_usd,
+        )
+        if signal.signal_type == "BUY":
+            assert signal.position_size_usd <= portfolio.balance_usd, (
+                f"Suggested ${signal.position_size_usd} but only ${portfolio.balance_usd} cash available"
+            )
+        else:
+            assert signal.signal_type in ("NO_TRADE", "WAIT")
+
+    def test_signal_skipped_when_zero_cash(self):
+        """With cash=0, engine should return NO_TRADE/WAIT, not BUY."""
+        import pandas as pd
+        import numpy as np
+
+        engine = StrategyEngine()
+        df = pd.DataFrame({
+            "open": np.random.uniform(49000, 51000, 250),
+            "high": np.random.uniform(49000, 51000, 250),
+            "low": np.random.uniform(49000, 51000, 250),
+            "close": np.random.uniform(49000, 51000, 250),
+            "volume": np.random.uniform(100, 1000, 250),
+        })
+
+        signal = engine.analyze(
+            "LINK/USD", df, df, 15.0,
+            settings.starting_balance, [], 0.0,
+            available_cash=0.0,
+        )
+        assert signal.signal_type != "BUY", (
+            "Engine should not propose BUY when available_cash=0"
+        )
+
 
 class TestPortfolioInvariants:
     """Invariants that must hold regardless of trade sequence."""
