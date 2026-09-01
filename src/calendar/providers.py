@@ -295,6 +295,10 @@ async def fetch_coinmarketcal_events(days_ahead: int = 14) -> list[MarketEvent]:
     return events
 
 
+def fetch_fomc_events(days_ahead: int = 30) -> list[MarketEvent]:
+    return get_fomc_events(days_ahead)
+
+
 def get_fomc_events(days_ahead: int = 30) -> list[MarketEvent]:
     now = datetime.now(timezone.utc)
     cutoff = now + timedelta(days=days_ahead)
