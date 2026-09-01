@@ -39,6 +39,10 @@ _formatter: SignalFormatter | None = None
 _last_signals: dict[str, TradeSignal] = {}
 _instance_id: str = str(uuid.uuid4())[:8]
 
+_alerted_stop_loss: set[str] = set()
+_alerted_drawdown: set[str] = set()
+DRAWDOWN_ALERT_PCT = 0.10
+
 
 def get_portfolio(mode: str | None = None) -> PaperPortfolio:
     m = mode or _active_mode
@@ -190,6 +194,54 @@ def _is_signal_equivalent(existing: object, new_signal: TradeSignal) -> bool:
     return True
 
 
+async def _check_position_alerts(symbol: str, current_price: float) -> None:
+    portfolio = get_portfolio()
+    positions = [p for p in portfolio.positions if p.status == "open" and p.symbol == symbol]
+    if not positions or _send_message_func is None:
+        return
+
+    for pos in positions:
+        alert_key = f"{pos.symbol}:{pos.entry_price}"
+
+        if pos.stop_loss and current_price <= pos.stop_loss and alert_key not in _alerted_stop_loss:
+            _alerted_stop_loss.add(alert_key)
+            loss_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
+            msg = (
+                f"\U0001f6a8 STOP-LOSS BREACH: {pos.symbol}\n\n"
+                f"Price: ${current_price:,.2f}\n"
+                f"Stop-loss: ${pos.stop_loss:,.2f}\n"
+                f"Entry: ${pos.entry_price:,.2f}\n"
+                f"Loss: {loss_pct:+.1f}%\n\n"
+                f"Action required: consider closing this position."
+            )
+            try:
+                await _send_message_func(msg)
+                logger.warning("STOP_LOSS_ALERT sent for %s at $%.2f (stop=$%.2f)",
+                               pos.symbol, current_price, pos.stop_loss)
+            except Exception as e:
+                logger.error("Failed to send stop-loss alert: %s", e)
+
+        peak = getattr(pos, "peak_price", None) or pos.entry_price
+        if peak > pos.entry_price * 1.03 and alert_key not in _alerted_drawdown:
+            drawdown = (peak - current_price) / peak
+            if drawdown >= DRAWDOWN_ALERT_PCT:
+                _alerted_drawdown.add(alert_key)
+                msg = (
+                    f"\U0001f4c9 DRAWDOWN ALERT: {pos.symbol}\n\n"
+                    f"Price: ${current_price:,.2f}\n"
+                    f"Peak: ${peak:,.2f}\n"
+                    f"Drawdown from peak: {drawdown * 100:.1f}%\n"
+                    f"Entry: ${pos.entry_price:,.2f}\n\n"
+                    f"Position lost significant gains from its peak."
+                )
+                try:
+                    await _send_message_func(msg)
+                    logger.warning("DRAWDOWN_ALERT sent for %s: %.1f%% from peak $%.2f",
+                                   pos.symbol, drawdown * 100, peak)
+                except Exception as e:
+                    logger.error("Failed to send drawdown alert: %s", e)
+
+
 def _resolve_asset_id(session, symbol: str) -> int | None:
     repo = AssetRepository(session)
     asset = repo.get_by_symbol(symbol)
@@ -240,6 +292,8 @@ async def _process_single_asset(asset: AssetConfig, cycle_mode: str | None = Non
     equity = portfolio.get_total_equity(prices)
 
     portfolio.update_peak_prices(prices)
+
+    await _check_position_alerts(asset.symbol, safety.current_price)
 
     signal = engine.analyze(
         symbol=asset.symbol,
@@ -827,7 +881,7 @@ async def calendar_refresh_job() -> None:
     try:
         from src.calendar.manager import get_calendar_manager
         mgr = get_calendar_manager()
-        stored = await mgr.refresh_events()
+        stored = mgr.refresh_events()
         logger.info("Calendar refresh completed: %d new events", stored)
     except Exception as e:
         logger.error("calendar_refresh_job failed: %s", e, exc_info=True)

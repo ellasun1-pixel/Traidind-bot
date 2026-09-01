@@ -6,12 +6,13 @@ from datetime import datetime, timezone, timedelta
 
 from src.database import get_session
 from src.database.models import CalendarEvent
-from src.calendar.providers import MarketEvent, fetch_all_events, init_crypto_map
+from src.calendar.providers import MarketEvent, fetch_fomc_events, init_crypto_map
 from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-ALERT_WINDOWS_HOURS = [24, 1]
+ALERT_WINDOWS_HOURS = [18, 1]
+_ALERT_COL_MAP: dict[int, str] = {18: "alerted_24h", 1: "alerted_1h"}
 
 
 class CalendarManager:
@@ -24,9 +25,9 @@ class CalendarManager:
             init_crypto_map(symbols)
             self._initialized = True
 
-    async def refresh_events(self) -> int:
+    def refresh_events(self) -> int:
         self._ensure_init()
-        events = await fetch_all_events(days_ahead=14)
+        events = fetch_fomc_events(days_ahead=30)
         stored = 0
         try:
             with get_session() as session:
@@ -95,7 +96,7 @@ class CalendarManager:
                     window_start = now + timedelta(hours=hours) - timedelta(minutes=15)
                     window_end = now + timedelta(hours=hours) + timedelta(minutes=15)
 
-                    col_name = f"alerted_{hours}h"
+                    col_name = _ALERT_COL_MAP.get(hours, f"alerted_{hours}h")
 
                     events = (
                         session.query(CalendarEvent)
@@ -118,6 +119,56 @@ class CalendarManager:
             logger.error("Failed to check alert windows: %s", e)
 
         return alerts
+
+    def add_event(self, title: str, event_time: datetime, category: str = "custom") -> CalendarEvent:
+        unique_key = f"manual:{event_time.strftime('%Y%m%d%H%M')}:{title[:60]}"
+        with get_session() as session:
+            existing = (
+                session.query(CalendarEvent)
+                .filter(CalendarEvent.unique_key == unique_key)
+                .first()
+            )
+            if existing:
+                raise ValueError(f"Event already exists: {existing.title} at {existing.event_time}")
+            ev = CalendarEvent(
+                unique_key=unique_key,
+                title=title,
+                event_time=event_time,
+                category=category,
+                source="manual",
+                impact="medium",
+            )
+            session.add(ev)
+            session.flush()
+            session.expunge(ev)
+        return ev
+
+    def remove_event(self, event_id: int) -> bool:
+        with get_session() as session:
+            ev = session.get(CalendarEvent, event_id)
+            if not ev:
+                return False
+            session.delete(ev)
+        return True
+
+    def list_all_upcoming(self) -> list[CalendarEvent]:
+        now = datetime.now(timezone.utc)
+        try:
+            with get_session() as session:
+                events = (
+                    session.query(CalendarEvent)
+                    .filter(CalendarEvent.event_time >= now)
+                    .order_by(CalendarEvent.event_time.asc())
+                    .all()
+                )
+                result = []
+                for ev in events:
+                    session.expunge(ev)
+                    result.append(ev)
+                return result
+        except Exception as e:
+            logger.error("Failed to list upcoming events: %s", e)
+            return []
 
 
 def format_event_alert(event: CalendarEvent, hours_before: int) -> str:

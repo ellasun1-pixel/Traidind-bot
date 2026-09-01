@@ -72,6 +72,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/switch\\_mode live|paper — Switch between LIVE and PAPER portfolios\n"
         "/sync\\_portfolio TICKER QTY CASH — Sync with actual exchange state\n"
         "/calendar — Upcoming market events (48h)\n"
+        "/add\\_event TITLE | YYYY-MM-DD HH:MM — Add a custom event\n"
+        "/list\\_events — List all upcoming events\n"
+        "/remove\\_event ID — Remove an event by ID\n"
         "/new\\_challenge — Reset and start a new paper challenge\n"
         "/help — Show this message"
     )
@@ -1037,6 +1040,18 @@ async def cmd_manual_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         risk_dollars = amount * stop_loss_pct
 
         portfolio = get_portfolio()
+
+        commission = amount * settings.commission_pct
+        spread_cost = amount * settings.spread_pct
+        total_cost = amount + commission + spread_cost
+        if total_cost > portfolio.balance_usd:
+            await update.message.reply_text(
+                f"Blocked: insufficient balance.\n"
+                f"Need ${total_cost:,.2f} (incl. fees), have ${portfolio.balance_usd:,.2f}.",
+                parse_mode=None,
+            )
+            return
+
         ok, msg = portfolio.confirm_buy(
             symbol=symbol,
             entry_price=price,
@@ -1334,29 +1349,9 @@ async def cmd_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         manager = get_calendar_manager()
         events = manager.get_upcoming(hours_ahead=48)
-
-        if not events:
-            try:
-                await manager.refresh_events()
-                events = manager.get_upcoming(hours_ahead=48)
-            except Exception as refresh_err:
-                logger.warning("Calendar refresh on first /calendar failed: %s", refresh_err)
-
         text = format_calendar_view(events)
-
-        missing_keys = []
-        import os
-        if not os.getenv("JBLANKED_API_KEY"):
-            missing_keys.append("JBLANKED_API_KEY")
-        if not os.getenv("COINMARKETCAL_API_KEY"):
-            missing_keys.append("COINMARKETCAL_API_KEY")
-        if missing_keys:
-            text += (
-                "\n\nℹ️ External calendar sources unavailable — "
-                f"missing env vars: {', '.join(missing_keys)}. "
-                "Only hardcoded FOMC dates are shown."
-            )
-
+        if not events:
+            text += "\n\nUse /add_event to add custom events or /list_events to see all."
         await update.message.reply_text(text, parse_mode=None)
     except Exception as e:
         logger.error("cmd_calendar crashed: %s", e, exc_info=True)
@@ -1364,6 +1359,119 @@ async def cmd_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Error loading calendar: {e}", parse_mode=None)
         except Exception:
             logger.error("cmd_calendar fallback reply also failed: %s", e)
+
+
+@owner_only
+async def cmd_add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        raw = " ".join(context.args or [])
+        if "|" not in raw:
+            await update.message.reply_text(
+                "Usage: /add_event TITLE | YYYY-MM-DD HH:MM\n"
+                "Example: /add_event CPI Release | 2026-09-10 12:30",
+                parse_mode=None,
+            )
+            return
+
+        title_part, time_part = raw.split("|", 1)
+        title = title_part.strip()
+        time_str = time_part.strip()
+
+        if not title:
+            await update.message.reply_text("Title cannot be empty.", parse_mode=None)
+            return
+
+        try:
+            event_time = datetime.strptime(time_str, "%Y-%m-%d %H:%M").replace(
+                tzinfo=__import__("datetime").timezone.utc
+            )
+        except ValueError:
+            await update.message.reply_text(
+                f"Cannot parse date '{time_str}'. Use format: YYYY-MM-DD HH:MM",
+                parse_mode=None,
+            )
+            return
+
+        manager = get_calendar_manager()
+        try:
+            ev = manager.add_event(title=title, event_time=event_time)
+        except ValueError as ve:
+            await update.message.reply_text(str(ve), parse_mode=None)
+            return
+
+        await update.message.reply_text(
+            f"Event added (id={ev.id}):\n"
+            f"{ev.title}\n"
+            f"{ev.event_time.strftime('%Y-%m-%d %H:%M UTC')}",
+            parse_mode=None,
+        )
+    except Exception as e:
+        logger.error("cmd_add_event crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Error: {e}", parse_mode=None)
+        except Exception:
+            pass
+
+
+@owner_only
+async def cmd_list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        manager = get_calendar_manager()
+        events = manager.list_all_upcoming()
+        if not events:
+            await update.message.reply_text(
+                "No upcoming events. Use /add_event to add one.",
+                parse_mode=None,
+            )
+            return
+
+        lines = ["Upcoming events:\n"]
+        for ev in events[:30]:
+            time_str = ev.event_time.strftime("%b %d, %H:%M UTC")
+            source_tag = f" [{ev.source}]" if ev.source else ""
+            lines.append(f"  id={ev.id}  {time_str}  {ev.title}{source_tag}")
+
+        if len(events) > 30:
+            lines.append(f"\n... and {len(events) - 30} more")
+
+        await update.message.reply_text("\n".join(lines), parse_mode=None)
+    except Exception as e:
+        logger.error("cmd_list_events crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Error: {e}", parse_mode=None)
+        except Exception:
+            pass
+
+
+@owner_only
+async def cmd_remove_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        args = context.args or []
+        if len(args) != 1:
+            await update.message.reply_text(
+                "Usage: /remove_event ID\nUse /list_events to find the ID.",
+                parse_mode=None,
+            )
+            return
+
+        try:
+            event_id = int(args[0])
+        except ValueError:
+            await update.message.reply_text("ID must be a number.", parse_mode=None)
+            return
+
+        manager = get_calendar_manager()
+        removed = manager.remove_event(event_id)
+        if removed:
+            await update.message.reply_text(f"Event {event_id} removed.", parse_mode=None)
+        else:
+            await update.message.reply_text(f"Event {event_id} not found.", parse_mode=None)
+    except Exception as e:
+        logger.error("cmd_remove_event crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Error: {e}", parse_mode=None)
+        except Exception:
+            pass
 
 
 def create_bot(token: str | None = None) -> Application:
@@ -1398,5 +1506,8 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("switch_mode", cmd_switch_mode))
     app.add_handler(CommandHandler("sync_portfolio", cmd_sync_portfolio))
     app.add_handler(CommandHandler("calendar", cmd_calendar))
+    app.add_handler(CommandHandler("add_event", cmd_add_event))
+    app.add_handler(CommandHandler("list_events", cmd_list_events))
+    app.add_handler(CommandHandler("remove_event", cmd_remove_event))
 
     return app

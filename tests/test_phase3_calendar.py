@@ -177,15 +177,14 @@ class TestCalendarManagerRefresh:
         mgr._initialized = True
         return mgr
 
-    @pytest.mark.asyncio
-    async def test_refresh_stores_new_events(self, manager):
+    def test_refresh_stores_new_events(self, manager):
         now = datetime.now(timezone.utc)
         mock_events = [
             MarketEvent(
                 title="Test Event",
                 event_time=now + timedelta(days=1),
                 category="macro",
-                source="jblanked",
+                source="fed_hardcoded",
                 impact="high",
             )
         ]
@@ -196,25 +195,24 @@ class TestCalendarManagerRefresh:
         mock_query.first.return_value = None
         mock_session.query.return_value = mock_query
 
-        with patch("src.calendar.manager.fetch_all_events", new_callable=AsyncMock, return_value=mock_events), \
+        with patch("src.calendar.manager.fetch_fomc_events", return_value=mock_events), \
              patch("src.calendar.manager.get_session") as mock_get_session:
             mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
-            stored = await manager.refresh_events()
+            stored = manager.refresh_events()
 
         assert stored == 1
         mock_session.add.assert_called_once()
 
-    @pytest.mark.asyncio
-    async def test_refresh_updates_existing_events(self, manager):
+    def test_refresh_updates_existing_events(self, manager):
         now = datetime.now(timezone.utc)
         mock_events = [
             MarketEvent(
                 title="Test Event",
                 event_time=now + timedelta(days=1),
                 category="macro",
-                source="jblanked",
+                source="fed_hardcoded",
                 impact="high",
                 description="Updated desc",
             )
@@ -227,12 +225,12 @@ class TestCalendarManagerRefresh:
         mock_query.first.return_value = existing
         mock_session.query.return_value = mock_query
 
-        with patch("src.calendar.manager.fetch_all_events", new_callable=AsyncMock, return_value=mock_events), \
+        with patch("src.calendar.manager.fetch_fomc_events", return_value=mock_events), \
              patch("src.calendar.manager.get_session") as mock_get_session:
             mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
-            stored = await manager.refresh_events()
+            stored = manager.refresh_events()
 
         assert stored == 0
         assert existing.description == "Updated desc"
@@ -329,12 +327,12 @@ class TestSchedulerCalendarJobs:
         from src.scheduler.jobs import calendar_refresh_job
 
         mock_manager = MagicMock()
-        mock_manager.refresh_events = AsyncMock(return_value=5)
+        mock_manager.refresh_events.return_value = 5
 
         with patch("src.calendar.manager.get_calendar_manager", return_value=mock_manager):
             await calendar_refresh_job()
 
-        mock_manager.refresh_events.assert_awaited_once()
+        mock_manager.refresh_events.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_calendar_alert_job_sends_alerts(self):

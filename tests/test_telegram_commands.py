@@ -780,6 +780,7 @@ async def test_manual_buy_price_unavailable(mock_update, mock_context):
 async def test_manual_buy_success(mock_update, mock_context):
     mock_context.args = ["BTC", "200"]
     mock_portfolio = MagicMock()
+    mock_portfolio.balance_usd = 10000.0
     mock_portfolio.confirm_buy.return_value = (True, "Bought 0.002 BTC/USD @ $100000.00")
 
     with patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock,
@@ -802,6 +803,7 @@ async def test_manual_buy_success(mock_update, mock_context):
 async def test_manual_buy_portfolio_rejects(mock_update, mock_context):
     mock_context.args = ["BTC", "200"]
     mock_portfolio = MagicMock()
+    mock_portfolio.balance_usd = 10000.0
     mock_portfolio.confirm_buy.return_value = (False, "Insufficient balance")
 
     with patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock,
@@ -817,6 +819,7 @@ async def test_manual_buy_portfolio_rejects(mock_update, mock_context):
 async def test_manual_buy_bracket_ticker(mock_update, mock_context):
     mock_context.args = ["[BTC]", "[200]"]
     mock_portfolio = MagicMock()
+    mock_portfolio.balance_usd = 10000.0
     mock_portfolio.confirm_buy.return_value = (True, "OK")
 
     with patch("src.telegram_bot.bot.get_live_prices", new_callable=AsyncMock,
@@ -839,6 +842,7 @@ async def test_manual_buy_passes_force_true(mock_update, mock_context):
     """manual_buy always records — passes force=True to confirm_buy."""
     mock_context.args = ["BTC", "10000"]
     mock_portfolio = MagicMock()
+    mock_portfolio.balance_usd = 50000.0
     mock_portfolio.confirm_buy.return_value = (
         True, "Bought 0.1 BTC/USD @ $100000.00\nWarnings: Risk exceeded"
     )
