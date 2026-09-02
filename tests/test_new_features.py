@@ -363,3 +363,104 @@ class TestPositionAlerts:
             jobs_mod._send_message_func = original_send
             jobs_mod._alerted_drawdown = original_dd
             jobs_mod._alerted_stop_loss = original_sl
+
+
+class TestSyncPortfolioStopLoss:
+    def test_sync_sets_stop_loss_automatically(self):
+        from src.portfolio.manager import PaperPortfolio
+        portfolio = PaperPortfolio.__new__(PaperPortfolio)
+        portfolio.positions = []
+        portfolio.closed_trades = []
+        portfolio.balance_usd = 0.0
+        portfolio.realized_pnl_total = 0.0
+        portfolio.starting_balance = 10000.0
+        portfolio.peak_balance = 10000.0
+        portfolio.challenge_status = "active"
+        portfolio.mode = "PAPER_CHALLENGE"
+
+        with patch("src.portfolio.manager.get_session") as mock_gs:
+            mock_session = MagicMock()
+            mock_query = MagicMock()
+            mock_query.filter.return_value = mock_query
+            mock_query.all.return_value = []
+            mock_query.first.return_value = None
+            mock_session.query.return_value = mock_query
+            mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+            result = portfolio.sync_portfolio(
+                symbol="UNI/USD",
+                quantity=1630.0,
+                cash=0.0,
+                current_price=6.35,
+            )
+
+        assert len(portfolio.positions) == 1
+        pos = portfolio.positions[0]
+        assert pos.stop_loss == pytest.approx(6.35 * 0.97, rel=1e-4)
+        assert "stop=$6.16" in result
+
+    def test_sync_stop_loss_with_custom_pct(self):
+        from src.portfolio.manager import PaperPortfolio
+        portfolio = PaperPortfolio.__new__(PaperPortfolio)
+        portfolio.positions = []
+        portfolio.closed_trades = []
+        portfolio.balance_usd = 0.0
+        portfolio.realized_pnl_total = 0.0
+        portfolio.starting_balance = 10000.0
+        portfolio.peak_balance = 10000.0
+        portfolio.challenge_status = "active"
+        portfolio.mode = "PAPER_CHALLENGE"
+
+        with patch("src.portfolio.manager.get_session") as mock_gs:
+            mock_session = MagicMock()
+            mock_query = MagicMock()
+            mock_query.filter.return_value = mock_query
+            mock_query.all.return_value = []
+            mock_query.first.return_value = None
+            mock_session.query.return_value = mock_query
+            mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+            portfolio.sync_portfolio(
+                symbol="BTC/USD",
+                quantity=0.1,
+                cash=0.0,
+                current_price=60000.0,
+                stop_loss_pct=0.05,
+            )
+
+        pos = portfolio.positions[0]
+        assert pos.stop_loss == pytest.approx(60000.0 * 0.95, rel=1e-4)
+
+
+class TestSetStopLoss:
+    def test_set_stop_loss_updates_position(self):
+        from src.portfolio.manager import PaperPortfolio, Position
+        portfolio = PaperPortfolio.__new__(PaperPortfolio)
+        pos = Position(
+            symbol="UNI/USD", side="BUY", entry_price=6.35,
+            quantity=1630.0, position_value_usd=10350.5,
+            commission_usd=0, spread_cost_usd=0, stop_loss=0.0,
+        )
+        portfolio.positions = [pos]
+
+        with patch("src.portfolio.manager.get_session") as mock_gs:
+            mock_session = MagicMock()
+            mock_session.get.return_value = None
+            mock_gs.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_gs.return_value.__exit__ = MagicMock(return_value=False)
+
+            result = portfolio.set_stop_loss("UNI/USD", 5.80)
+
+        assert pos.stop_loss == 5.80
+        assert "$5.80" in result
+        assert "UNI/USD" in result
+
+    def test_set_stop_loss_no_position(self):
+        from src.portfolio.manager import PaperPortfolio
+        portfolio = PaperPortfolio.__new__(PaperPortfolio)
+        portfolio.positions = []
+
+        result = portfolio.set_stop_loss("UNI/USD", 5.80)
+        assert "No open position" in result

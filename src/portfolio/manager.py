@@ -821,6 +821,7 @@ class PaperPortfolio:
         quantity: float,
         cash: float,
         current_price: float,
+        stop_loss_pct: float = 0.03,
     ) -> str:
         """Replace all positions and cash with the given state.
 
@@ -840,6 +841,7 @@ class PaperPortfolio:
 
         if quantity > 0 and current_price > 0:
             position_value = quantity * current_price
+            stop_loss = current_price * (1 - stop_loss_pct)
             pos = Position(
                 symbol=symbol,
                 side="BUY",
@@ -848,7 +850,7 @@ class PaperPortfolio:
                 position_value_usd=position_value,
                 commission_usd=0.0,
                 spread_cost_usd=0.0,
-                stop_loss=0.0,
+                stop_loss=stop_loss,
             )
             self.positions.append(pos)
 
@@ -879,7 +881,7 @@ class PaperPortfolio:
                             side="BUY",
                             quantity=quantity,
                             entry_price=current_price,
-                            stop_loss=0.0,
+                            stop_loss=current_price * (1 - stop_loss_pct),
                         )
                         self.positions[0]._db_position_id = db_pos.id
         except Exception as e:
@@ -891,9 +893,35 @@ class PaperPortfolio:
             "PORTFOLIO_SYNCED [%s]: symbol=%s qty=%.8f cash=$%.2f equity=$%.2f",
             self.mode, symbol, quantity, cash, equity,
         )
+        sl_info = f", stop=${current_price * (1 - stop_loss_pct):.2f}" if quantity > 0 else ""
         return (
-            f"Portfolio synced: {quantity:.6f} {symbol} @ ${current_price:.2f}, "
+            f"Portfolio synced: {quantity:.6f} {symbol} @ ${current_price:.2f}{sl_info}, "
             f"cash=${cash:.2f}, equity=${equity:.2f}"
+        )
+
+    def set_stop_loss(self, symbol: str, stop_price: float) -> str:
+        pos = next(
+            (p for p in self.positions if p.status == "open" and p.symbol == symbol),
+            None,
+        )
+        if not pos:
+            return f"No open position for {symbol}."
+
+        old_stop = pos.stop_loss
+        pos.stop_loss = stop_price
+
+        if hasattr(pos, "_db_position_id") and pos._db_position_id:
+            try:
+                with get_session() as session:
+                    db_pos = session.get(PaperPosition, pos._db_position_id)
+                    if db_pos:
+                        db_pos.stop_loss = stop_price
+            except Exception as e:
+                logger.error("Failed to persist stop_loss update: %s", e)
+
+        return (
+            f"Stop-loss for {symbol} updated: ${old_stop:,.2f} -> ${stop_price:,.2f} "
+            f"(entry: ${pos.entry_price:,.2f})"
         )
 
     def _get_equity_estimate(self) -> float:

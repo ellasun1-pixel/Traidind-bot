@@ -71,6 +71,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/manual\\_sell TICKER — Record a sell at current market price\n"
         "/switch\\_mode live|paper — Switch between LIVE and PAPER portfolios\n"
         "/sync\\_portfolio TICKER QTY CASH — Sync with actual exchange state\n"
+        "/set\\_stop TICKER PRICE — Set/update stop-loss for a position\n"
         "/calendar — Upcoming market events (48h)\n"
         "/add\\_event TITLE | YYYY-MM-DD HH:MM — Add a custom event\n"
         "/list\\_events — List all upcoming events\n"
@@ -1303,12 +1304,14 @@ async def cmd_sync_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
 
         current_price = prices[symbol]
+        stop_loss_pct = float(asset_cfg.stop_loss_pct) if hasattr(asset_cfg, "stop_loss_pct") else 0.03
         portfolio = get_portfolio()
         result = portfolio.sync_portfolio(
             symbol=symbol,
             quantity=quantity,
             cash=cash,
             current_price=current_price,
+            stop_loss_pct=stop_loss_pct,
         )
 
         equity = portfolio.get_total_equity(prices)
@@ -1338,6 +1341,59 @@ async def cmd_sync_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     except Exception as e:
         logger.error("cmd_sync_portfolio crashed: %s", e, exc_info=True)
+        try:
+            await update.message.reply_text(f"Error: {e}", parse_mode=None)
+        except Exception:
+            pass
+
+
+@owner_only
+async def cmd_set_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        args = context.args or []
+        if len(args) != 2:
+            await update.message.reply_text(
+                "Usage: /set_stop TICKER PRICE\n"
+                "Example: /set_stop UNI 5.80\n\n"
+                "Sets or updates stop-loss for an open position.",
+                parse_mode=None,
+            )
+            return
+
+        symbol = _normalize_symbol(args[0])
+        if not symbol:
+            await update.message.reply_text(
+                "Could not parse ticker.", parse_mode=None,
+            )
+            return
+
+        try:
+            stop_price = float(args[1])
+            if stop_price <= 0:
+                await update.message.reply_text("Stop price must be positive.", parse_mode=None)
+                return
+        except ValueError:
+            await update.message.reply_text(
+                f"'{args[1]}' is not a valid price.", parse_mode=None,
+            )
+            return
+
+        portfolio = get_portfolio()
+        result = portfolio.set_stop_loss(symbol, stop_price)
+        await update.message.reply_text(result, parse_mode=None)
+
+        try:
+            with get_session() as session:
+                session.add(AuditLog(
+                    action="set_stop",
+                    actor=str(update.effective_user.id),
+                    detail={"symbol": symbol, "stop_price": stop_price},
+                ))
+        except Exception as e:
+            logger.error("Failed to write set_stop audit log: %s", e)
+
+    except Exception as e:
+        logger.error("cmd_set_stop crashed: %s", e, exc_info=True)
         try:
             await update.message.reply_text(f"Error: {e}", parse_mode=None)
         except Exception:
@@ -1505,6 +1561,7 @@ def create_bot(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("manual_sell", cmd_manual_sell))
     app.add_handler(CommandHandler("switch_mode", cmd_switch_mode))
     app.add_handler(CommandHandler("sync_portfolio", cmd_sync_portfolio))
+    app.add_handler(CommandHandler("set_stop", cmd_set_stop))
     app.add_handler(CommandHandler("calendar", cmd_calendar))
     app.add_handler(CommandHandler("add_event", cmd_add_event))
     app.add_handler(CommandHandler("list_events", cmd_list_events))
