@@ -107,6 +107,7 @@ class PaperPortfolio:
         self.closed_trades: list[Position] = []
         self.risk_manager = RiskManager()
         self.challenge_status = "active"
+        self._is_fallback = False
         self._update_challenge_status()
 
     def confirm_buy(
@@ -791,14 +792,23 @@ class PaperPortfolio:
 
         except Exception as e:
             logger.error(
-                "RESTORE_FAILED mode=%s — starting fresh at $%.2f: %s",
-                mode, settings.starting_balance, e, exc_info=True,
+                "RESTORE_FAILED mode=%s — returning empty portfolio but NOT "
+                "overwriting DB. Error: %s",
+                mode, e, exc_info=True,
             )
-            return cls(mode=mode)
+            fallback = cls(mode=mode)
+            fallback._is_fallback = True
+            return fallback
 
         return portfolio
 
     def _sync_account_table(self) -> None:
+        if getattr(self, "_is_fallback", False):
+            logger.warning(
+                "SYNC_BLOCKED: refusing to write fallback portfolio [%s] to DB",
+                self.mode,
+            )
+            return
         try:
             with get_session() as session:
                 acct_repo = PaperAccountRepository(session)
