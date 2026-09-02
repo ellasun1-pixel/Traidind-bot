@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 _portfolios: dict[str, PaperPortfolio] = {}
 _active_mode: str = "PAPER_CHALLENGE"
+_mode_restored: bool = False
 _send_message_func = None
 _pipeline: MarketDataPipeline | None = None
 _engine: StrategyEngine | None = None
@@ -44,10 +45,34 @@ _alerted_drawdown: set[str] = set()
 DRAWDOWN_ALERT_PCT = 0.10
 
 
+def _ensure_mode_restored() -> None:
+    global _active_mode, _mode_restored
+    if _mode_restored:
+        return
+    _mode_restored = True
+    try:
+        with get_session() as session:
+            setting_repo = AppSettingRepository(session)
+            saved = setting_repo.get("active_portfolio_mode")
+            if saved and saved in ("PAPER_CHALLENGE", "LIVE_FUNDED"):
+                _active_mode = saved
+                logger.info("EARLY_MODE_RESTORE: active_portfolio_mode=%s", saved)
+    except Exception as e:
+        logger.warning("EARLY_MODE_RESTORE failed: %s", e)
+
+
 def get_portfolio(mode: str | None = None) -> PaperPortfolio:
+    if mode is None:
+        _ensure_mode_restored()
     m = mode or _active_mode
     if m not in _portfolios:
-        _portfolios[m] = PaperPortfolio.restore_from_db(mode=m)
+        restored = PaperPortfolio.restore_from_db(mode=m)
+        if getattr(restored, "_is_fallback", False):
+            logger.warning(
+                "FALLBACK_PORTFOLIO mode=%s — NOT caching, will retry on next call", m,
+            )
+            return restored
+        _portfolios[m] = restored
     return _portfolios[m]
 
 
@@ -56,8 +81,9 @@ def get_active_mode() -> str:
 
 
 def set_active_mode(mode: str) -> None:
-    global _active_mode
+    global _active_mode, _mode_restored
     _active_mode = mode
+    _mode_restored = True
 
 
 async def get_live_prices(symbols: list[str] | None = None) -> dict[str, float]:
