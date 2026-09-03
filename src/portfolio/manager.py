@@ -6,7 +6,7 @@ from typing import Optional
 
 from src.config import settings
 from src.database import get_session
-from src.database.models import PaperPosition, TradeHistory, Asset, PortfolioSnapshot
+from src.database.models import PaperPosition, TradeHistory, Asset, PortfolioSnapshot, PaperAccount
 from src.database.repository import PositionRepository, TradeHistoryRepository, PaperAccountRepository
 from src.risk.manager import RiskManager
 
@@ -701,6 +701,13 @@ class PaperPortfolio:
                     .first()
                 )
 
+                acct_repo = PaperAccountRepository(session)
+                account = (
+                    session.query(PaperAccount)
+                    .filter(PaperAccount.agent_mode == mode)
+                    .first()
+                )
+
                 if not open_positions and not closed_positions:
                     if latest_snap and float(latest_snap.cash_usd) != settings.starting_balance:
                         logger.info(
@@ -710,19 +717,42 @@ class PaperPortfolio:
                         )
                     return portfolio
 
-                balance = settings.starting_balance
-                realized_total = 0.0
+                real_closed = [
+                    cp for cp in closed_positions
+                    if cp.close_reason != "sync_replaced"
+                ]
 
-                for cp in closed_positions:
+                use_account_balance = account is not None
+                if use_account_balance:
+                    balance = float(account.balance_usd)
+                    realized_total = float(account.realized_pnl or 0)
+                    logger.info(
+                        "RESTORE_BALANCE: using paper_account balance=$%.2f "
+                        "realized_pnl=$%.2f (not recalculating from trades)",
+                        balance, realized_total,
+                    )
+                else:
+                    balance = settings.starting_balance
+                    realized_total = 0.0
+                    for cp in real_closed:
+                        entry_val = float(cp.entry_price) * float(cp.quantity)
+                        commission = entry_val * settings.commission_pct
+                        spread = entry_val * settings.spread_pct
+                        cost = entry_val + commission + spread
+                        balance -= cost
+                        proceeds = float(cp.exit_price) * float(cp.quantity)
+                        balance += proceeds
+                        realized_total += float(cp.realized_pnl or 0)
+                    logger.info(
+                        "RESTORE_BALANCE: recalculated from %d trades, "
+                        "balance=$%.2f realized_pnl=$%.2f",
+                        len(real_closed), balance, realized_total,
+                    )
+
+                for cp in real_closed:
                     entry_val = float(cp.entry_price) * float(cp.quantity)
                     commission = entry_val * settings.commission_pct
                     spread = entry_val * settings.spread_pct
-                    cost = entry_val + commission + spread
-                    balance -= cost
-                    proceeds = float(cp.exit_price) * float(cp.quantity)
-                    balance += proceeds
-                    realized_total += float(cp.realized_pnl or 0)
-
                     closed_pos = Position(
                         symbol=cp.asset.symbol,
                         side=cp.side or "BUY",
@@ -744,8 +774,6 @@ class PaperPortfolio:
                     entry_val = float(op.entry_price) * float(op.quantity)
                     commission = entry_val * settings.commission_pct
                     spread = entry_val * settings.spread_pct
-                    cost = entry_val + commission + spread
-                    balance -= cost
 
                     open_pos = Position(
                         symbol=op.asset.symbol,
@@ -770,7 +798,14 @@ class PaperPortfolio:
                 portfolio.realized_pnl_total = round(realized_total, 2)
 
                 entry_equity = portfolio.get_total_equity({})
-                if latest_snap:
+
+                if account and float(account.peak_balance or 0) > 0:
+                    portfolio.peak_balance = max(
+                        float(account.peak_balance),
+                        entry_equity,
+                        settings.starting_balance,
+                    )
+                elif latest_snap:
                     portfolio.peak_balance = max(
                         float(latest_snap.equity_usd),
                         entry_equity,
@@ -781,6 +816,11 @@ class PaperPortfolio:
                         entry_equity,
                         settings.starting_balance,
                     )
+
+                if account:
+                    stored_status = getattr(account, "challenge_status", None)
+                    if stored_status in ("active", "won", "lost"):
+                        portfolio.challenge_status = stored_status
 
                 portfolio._update_challenge_status()
 

@@ -646,14 +646,15 @@ class TestChallengeResetDBCleanup:
     def test_challenge_reset_positions_excluded_from_balance_replay(self):
         """After reset, restore_from_db must not replay challenge_reset closes."""
         from unittest.mock import patch, MagicMock
+        from src.database.models import PaperAccount
 
         with patch("src.portfolio.manager.get_session") as mock_get_session:
             mock_session = MagicMock()
             mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
-            mock_query = mock_session.query.return_value
-            mock_join = mock_query.join.return_value
+            mock_position_query = MagicMock()
+            mock_join = mock_position_query.join.return_value
             mock_filter = mock_join.filter.return_value
 
             call_count = [0]
@@ -667,6 +668,19 @@ class TestChallengeResetDBCleanup:
             mock_filter.filter.return_value.order_by = side_effect_order_by
             mock_filter.filter.return_value.filter.return_value.order_by = side_effect_order_by
             mock_filter.filter.return_value.filter.return_value.filter.return_value.order_by = side_effect_order_by
+
+            mock_account_query = MagicMock()
+            mock_account_query.filter.return_value.first.return_value = None
+
+            mock_snapshot_query = MagicMock()
+            mock_snapshot_query.filter.return_value.order_by.return_value.first.return_value = None
+
+            def query_side_effect(model):
+                if model is PaperAccount:
+                    return mock_account_query
+                return mock_position_query
+
+            mock_session.query.side_effect = query_side_effect
 
             portfolio = PaperPortfolio.restore_from_db()
 
