@@ -51,6 +51,8 @@ WARMUP = {
     "rvol_pct25_60": 80,
     "price_change_48h": 2,
     "price_change_short": 1,
+    "ema5": 5,
+    "price_change_3d": 3,
 }
 
 MIN_CANDLES_FOR_FULL_VALIDITY = 200
@@ -78,4 +80,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["rvol_pct25"] = df["rvol"].rolling(60).quantile(0.25)
     df["price_change_48h"] = df["close"].pct_change(periods=2)
     df["price_change_short"] = df["close"].pct_change(periods=1)
+    df["ema5"] = ema(df["close"], 5)
+    df["price_change_3d"] = df["close"].pct_change(periods=3)
     return df

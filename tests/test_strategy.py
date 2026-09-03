@@ -137,3 +137,104 @@ class TestStrategyEngine:
         engine = StrategyEngine()
         signal = engine.analyze("BTC/USD", pd.DataFrame(), pd.DataFrame(), 50000, settings.starting_balance, [], 0)
         assert signal.signal_type == "NO_TRADE"
+
+
+class TestMomentumFilter:
+    """Tests for the short-term momentum filter on BUY signals."""
+
+    def test_block_buy_on_severe_1d_drop(self):
+        engine = StrategyEngine()
+        row = pd.Series({
+            "price_change_short": -0.05,
+            "price_change_3d": -0.02,
+            "close": 100,
+            "ema5": 105,
+        })
+        result = engine._check_momentum(row, 100)
+        assert result == "BLOCK"
+
+    def test_block_buy_on_severe_3d_drop(self):
+        engine = StrategyEngine()
+        row = pd.Series({
+            "price_change_short": -0.01,
+            "price_change_3d": -0.09,
+            "close": 100,
+            "ema5": 105,
+        })
+        result = engine._check_momentum(row, 100)
+        assert result == "BLOCK"
+
+    def test_warn_on_moderate_1d_drop(self):
+        engine = StrategyEngine()
+        row = pd.Series({
+            "price_change_short": -0.025,
+            "price_change_3d": -0.01,
+            "close": 100,
+            "ema5": 101,
+        })
+        result = engine._check_momentum(row, 100)
+        assert result is not None
+        assert result != "BLOCK"
+        assert "fell" in result
+
+    def test_warn_when_below_ema5(self):
+        engine = StrategyEngine()
+        row = pd.Series({
+            "price_change_short": -0.005,
+            "price_change_3d": -0.01,
+            "close": 98,
+            "ema5": 100,
+        })
+        result = engine._check_momentum(row, 98)
+        assert result is not None
+        assert result != "BLOCK"
+        assert "5-day EMA" in result
+
+    def test_no_warning_when_momentum_positive(self):
+        engine = StrategyEngine()
+        row = pd.Series({
+            "price_change_short": 0.01,
+            "price_change_3d": 0.03,
+            "close": 105,
+            "ema5": 102,
+        })
+        result = engine._check_momentum(row, 105)
+        assert result is None
+
+    def test_no_warning_when_flat(self):
+        engine = StrategyEngine()
+        row = pd.Series({
+            "price_change_short": -0.005,
+            "price_change_3d": -0.01,
+            "close": 101,
+            "ema5": 100,
+        })
+        result = engine._check_momentum(row, 101)
+        assert result is None
+
+    def test_warn_combines_multiple_signals(self):
+        engine = StrategyEngine()
+        row = pd.Series({
+            "price_change_short": -0.025,
+            "price_change_3d": -0.05,
+            "close": 95,
+            "ema5": 100,
+        })
+        result = engine._check_momentum(row, 95)
+        assert result is not None
+        assert result != "BLOCK"
+        assert "today" in result
+        assert "3 days" in result
+        assert "5-day EMA" in result
+
+    def test_momentum_warning_downgrades_buy_priority(self):
+        """BUY with momentum warning should be MEDIUM priority, not HIGH."""
+        engine = StrategyEngine()
+        row = pd.Series({
+            "price_change_short": -0.025,
+            "price_change_3d": -0.01,
+            "close": 100,
+            "ema5": 101,
+        })
+        warning = engine._check_momentum(row, 100)
+        assert warning is not None and warning != "BLOCK"
