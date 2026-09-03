@@ -596,6 +596,7 @@ class PaperPortfolio:
 
     @classmethod
     def restore_from_db(cls, mode: str = "PAPER_CHALLENGE") -> "PaperPortfolio":
+        logger.warning("RESTORE_START mode=%s", mode)
         portfolio = cls(mode=mode)
         try:
             with get_session() as session:
@@ -606,6 +607,10 @@ class PaperPortfolio:
                     .filter(PaperPosition.agent_mode == mode)
                     .order_by(PaperPosition.opened_at.desc())
                     .all()
+                )
+                logger.warning(
+                    "RESTORE_QUERY mode=%s open_positions_found=%d",
+                    mode, len(all_open),
                 )
 
                 if not all_open:
@@ -869,6 +874,8 @@ class PaperPortfolio:
         self.challenge_status = "active"
         self._update_challenge_status({symbol: current_price} if quantity > 0 else {})
 
+        db_ok = False
+        db_error = ""
         try:
             with get_session() as session:
                 open_db = (
@@ -878,35 +885,73 @@ class PaperPortfolio:
                     .all()
                 )
                 repo = PositionRepository(session)
+                closed_count = len(open_db)
                 for db_pos in open_db:
                     repo.close(db_pos, float(db_pos.entry_price), 0.0, "sync_replaced")
                 session.flush()
 
                 if quantity > 0:
                     asset = session.query(Asset).filter(Asset.symbol == symbol).first()
-                    if asset:
-                        db_pos = repo.create(
-                            asset_id=asset.id,
-                            agent_mode=self.mode,
-                            side="BUY",
-                            quantity=quantity,
-                            entry_price=current_price,
-                            stop_loss=current_price * (1 - stop_loss_pct),
+                    if not asset:
+                        db_error = f"Asset '{symbol}' not found in DB"
+                        logger.error(
+                            "SYNC_DB_FAIL: %s — position NOT saved. "
+                            "Existing %d positions were closed. Rolling back.",
+                            db_error, closed_count,
                         )
-                        self.positions[0]._db_position_id = db_pos.id
+                        raise ValueError(db_error)
+
+                    db_pos = repo.create(
+                        asset_id=asset.id,
+                        agent_mode=self.mode,
+                        side="BUY",
+                        quantity=quantity,
+                        entry_price=current_price,
+                        stop_loss=current_price * (1 - stop_loss_pct),
+                    )
+                    self.positions[0]._db_position_id = db_pos.id
+                    logger.warning(
+                        "SYNC_DB_WRITE: position id=%s asset=%s mode=%s qty=%.8f price=%.2f",
+                        db_pos.id, symbol, self.mode, quantity, current_price,
+                    )
+
+            db_ok = True
         except Exception as e:
-            logger.error("Failed to sync portfolio to DB: %s", e)
+            db_error = str(e)
+            logger.error(
+                "SYNC_DB_FAIL: mode=%s symbol=%s — %s",
+                self.mode, symbol, e, exc_info=True,
+            )
+
+        if db_ok:
+            with get_session() as verify_session:
+                verify_count = (
+                    verify_session.query(PaperPosition)
+                    .filter(PaperPosition.is_open.is_(True))
+                    .filter(PaperPosition.agent_mode == self.mode)
+                    .count()
+                )
+                logger.warning(
+                    "SYNC_DB_VERIFY: mode=%s open_positions_in_db=%d (expected %s)",
+                    self.mode, verify_count,
+                    "1" if quantity > 0 else "0",
+                )
+                if quantity > 0 and verify_count == 0:
+                    db_ok = False
+                    db_error = "Position written but not found on re-read"
+                    logger.error("SYNC_DB_VERIFY_FAIL: %s", db_error)
 
         self._sync_account_table()
 
         logger.warning(
-            "PORTFOLIO_SYNCED [%s]: symbol=%s qty=%.8f cash=$%.2f equity=$%.2f",
-            self.mode, symbol, quantity, cash, equity,
+            "PORTFOLIO_SYNCED [%s]: symbol=%s qty=%.8f cash=$%.2f equity=$%.2f db_ok=%s",
+            self.mode, symbol, quantity, cash, equity, db_ok,
         )
         sl_info = f", stop=${current_price * (1 - stop_loss_pct):.2f}" if quantity > 0 else ""
+        db_warning = "" if db_ok else f"\n\nWARNING: DB write failed ({db_error}). State may not survive restart."
         return (
             f"Portfolio synced: {quantity:.6f} {symbol} @ ${current_price:.2f}{sl_info}, "
-            f"cash=${cash:.2f}, equity=${equity:.2f}"
+            f"cash=${cash:.2f}, equity=${equity:.2f}{db_warning}"
         )
 
     def set_stop_loss(self, symbol: str, stop_price: float) -> str:

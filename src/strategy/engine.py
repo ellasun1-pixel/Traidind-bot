@@ -385,6 +385,14 @@ class StrategyEngine:
         if regime != MarketRegime.TREND:
             return None
 
+        momentum_warning = self._check_momentum(latest, current_price)
+        if momentum_warning == "BLOCK":
+            logger.info(
+                "BUY_BLOCKED_MOMENTUM %s: price falling despite TREND regime",
+                symbol,
+            )
+            return None
+
         stop_distance_pct = 0.03
         expected_profit_pct = stop_distance_pct * self.take_profit_multiple
         if expected_profit_pct <= min_expected_profit_pct:
@@ -423,9 +431,16 @@ class StrategyEngine:
         price_range_low = current_price * 0.998
         price_range_high = current_price * 1.002
 
+        reason = f"Regime={regime.value}, EMA200 trend confirmed, risk within budget"
+        explanation = "Trend looks favorable and risk is managed — consider a small position"
+
+        if momentum_warning:
+            reason = f"{reason} | {momentum_warning}"
+            explanation = f"{explanation}\n⚠️ {momentum_warning}"
+
         return TradeSignal(
             signal_type="BUY",
-            priority="MEDIUM" if regime != MarketRegime.TREND else "HIGH",
+            priority="MEDIUM" if momentum_warning else "HIGH",
             asset_symbol=symbol,
             regime=regime,
             entry_price=current_price,
@@ -434,8 +449,8 @@ class StrategyEngine:
             max_loss_usd=round(risk_dollars, 2),
             order_type="LIMIT",
             cancel_level=round(current_price * 1.01, 2),
-            reason=f"Regime={regime.value}, EMA200 trend confirmed, risk within budget",
-            explanation="Trend looks favorable and risk is managed — consider a small position",
+            reason=reason,
+            explanation=explanation,
             price_range_low=round(price_range_low, 2),
             price_range_high=round(price_range_high, 2),
             remaining_usd=round(cash - position_value, 2),
@@ -443,6 +458,41 @@ class StrategyEngine:
             distance_to_win=round(settings.win_level - balance, 2),
             distance_to_loss=round(balance - settings.loss_level, 2),
         )
+
+    def _check_momentum(self, latest: pd.Series, current_price: float) -> str | None:
+        """Check short-term momentum against the TREND regime.
+
+        Returns:
+            "BLOCK" — price is actively crashing, suppress BUY entirely.
+            A warning string — mild decline, let BUY through but warn user.
+            None — momentum is fine, no warning needed.
+        """
+        change_1d = float(latest.get("price_change_short", 0) or 0)
+        change_3d = float(latest.get("price_change_3d", 0) or 0)
+        close = float(latest.get("close", 0) or 0)
+        ema5 = float(latest.get("ema5", 0) or 0)
+
+        if change_3d <= -0.08:
+            return "BLOCK"
+
+        if change_1d <= -0.04:
+            return "BLOCK"
+
+        warnings = []
+
+        if change_1d < -0.02:
+            warnings.append(f"price fell {abs(change_1d)*100:.1f}% today")
+
+        if change_3d < -0.04:
+            warnings.append(f"price fell {abs(change_3d)*100:.1f}% over 3 days")
+
+        if ema5 > 0 and close < ema5:
+            warnings.append("price below 5-day EMA")
+
+        if warnings:
+            return "Short-term decline despite TREND: " + ", ".join(warnings)
+
+        return None
 
     def _is_closed_candle_confirmation(self, latest: pd.Series, prev: pd.Series) -> bool:
         prev_close = prev.get("close", 0)
