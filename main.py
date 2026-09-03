@@ -216,6 +216,17 @@ def run_bot():
         logger.info("=== STARTUP COMPLETE — readiness gate open (PID %d) ===", os.getpid())
 
         try:
+            from src.scheduler.jobs import get_active_mode
+            mode = get_active_mode()
+            await send_to_chat(
+                f"Bot restarted and ready.\n"
+                f"Active mode: {mode}\n"
+                f"Commands are now being accepted."
+            )
+        except Exception as e:
+            logger.warning("Failed to send startup notification: %s", e)
+
+        try:
             await market_check_job()
             logger.info("Initial market check completed")
         except Exception as e:
@@ -230,10 +241,10 @@ def run_bot():
     app.add_error_handler(error_handler)
     app.post_init = post_init
 
-    logger.info("Starting polling loop (bootstrap_retries=-1, drop_pending_updates=True)")
+    logger.info("Starting polling loop (bootstrap_retries=-1, drop_pending_updates=False)")
     try:
         app.run_polling(
-            drop_pending_updates=True,
+            drop_pending_updates=False,
             bootstrap_retries=-1,
         )
     except SystemExit:

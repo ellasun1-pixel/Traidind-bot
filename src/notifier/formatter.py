@@ -43,12 +43,22 @@ class SignalFormatter:
         emoji = priority_emoji.get(signal.priority, "\U0001f535")
         regime_val = signal.regime.value if hasattr(signal.regime, "value") else str(signal.regime)
 
+        mode_label = ""
+        if getattr(signal, "active_mode", ""):
+            mode_label = signal.active_mode.replace("_", " ").title()
+
         lines = [
             f"{emoji} *{signal.priority} Signal — {_esc(signal.signal_type)}*",
             "",
+        ]
+
+        if mode_label:
+            lines.append(f"Mode: *{_esc(mode_label)}*")
+
+        lines.extend([
             "⚡ *PAPER TRADE — no real order will be placed.*",
             "",
-        ]
+        ])
 
         if signal_id:
             lines.append(f"Signal ID: `{signal_id}`")
