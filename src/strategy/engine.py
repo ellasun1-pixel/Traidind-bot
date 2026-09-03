@@ -462,6 +462,9 @@ class StrategyEngine:
     def _check_momentum(self, latest: pd.Series, current_price: float) -> str | None:
         """Check short-term momentum against the TREND regime.
 
+        Uses BOTH daily candle data AND live current_price vs last close
+        to catch intraday drops that daily candles miss.
+
         Returns:
             "BLOCK" — price is actively crashing, suppress BUY entirely.
             A warning string — mild decline, let BUY through but warn user.
@@ -469,8 +472,12 @@ class StrategyEngine:
         """
         change_1d = float(latest.get("price_change_short", 0) or 0)
         change_3d = float(latest.get("price_change_3d", 0) or 0)
-        close = float(latest.get("close", 0) or 0)
+        last_close = float(latest.get("close", 0) or 0)
         ema5 = float(latest.get("ema5", 0) or 0)
+
+        intraday_change = 0.0
+        if last_close > 0 and current_price > 0:
+            intraday_change = (current_price - last_close) / last_close
 
         if change_3d <= -0.08:
             return "BLOCK"
@@ -478,16 +485,25 @@ class StrategyEngine:
         if change_1d <= -0.04:
             return "BLOCK"
 
+        if intraday_change <= -0.04:
+            return "BLOCK"
+
         warnings = []
 
+        if intraday_change < -0.015:
+            warnings.append(
+                f"live price ${current_price:.2f} is {abs(intraday_change)*100:.1f}% "
+                f"below last close ${last_close:.2f}"
+            )
+
         if change_1d < -0.02:
-            warnings.append(f"price fell {abs(change_1d)*100:.1f}% today")
+            warnings.append(f"prev candle fell {abs(change_1d)*100:.1f}%")
 
         if change_3d < -0.04:
-            warnings.append(f"price fell {abs(change_3d)*100:.1f}% over 3 days")
+            warnings.append(f"fell {abs(change_3d)*100:.1f}% over 3 days")
 
-        if ema5 > 0 and close < ema5:
-            warnings.append("price below 5-day EMA")
+        if ema5 > 0 and current_price < ema5:
+            warnings.append(f"live price below 5-day EMA (${ema5:.2f})")
 
         if warnings:
             return "Short-term decline despite TREND: " + ", ".join(warnings)
