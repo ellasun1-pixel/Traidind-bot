@@ -908,6 +908,7 @@ class PaperPortfolio:
                         quantity=quantity,
                         entry_price=current_price,
                         stop_loss=current_price * (1 - stop_loss_pct),
+                        peak_price=current_price,
                     )
                     self.positions[0]._db_position_id = db_pos.id
                     logger.warning(

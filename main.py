@@ -118,6 +118,48 @@ def _ensure_agent_mode_column():
     engine.dispose()
 
 
+def _ensure_position_tracking_columns():
+    """Ensure peak_price, tp1_fired, tp2_fired exist on paper_positions.
+
+    Migration 013 adds these, but if alembic_version advanced without the
+    columns actually being created, every query on paper_positions crashes
+    with UndefinedColumn.  This runs before ORM init and is idempotent.
+    """
+    from sqlalchemy import create_engine, text, inspect as sa_inspect
+    db_url = os.environ.get("DATABASE_URL", "")
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    if not db_url:
+        return
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            insp = sa_inspect(conn)
+            try:
+                col_names = [c["name"] for c in insp.get_columns("paper_positions")]
+            except Exception:
+                logger.info("COLUMN_CHECK paper_positions: table not found, skipping")
+                return
+
+            required = {
+                "peak_price": "NUMERIC(18,8)",
+                "tp1_fired": "BOOLEAN NOT NULL DEFAULT false",
+                "tp2_fired": "BOOLEAN NOT NULL DEFAULT false",
+            }
+            for col, col_def in required.items():
+                if col not in col_names:
+                    logger.warning("COLUMN_CHECK paper_positions: adding missing column %s", col)
+                    conn.execute(text(
+                        f"ALTER TABLE paper_positions ADD COLUMN {col} {col_def}"
+                    ))
+                    conn.commit()
+                    logger.info("COLUMN_CHECK paper_positions: %s added", col)
+                else:
+                    logger.info("COLUMN_CHECK paper_positions: %s exists, OK", col)
+    finally:
+        engine.dispose()
+
+
 def run_bot():
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
@@ -148,6 +190,7 @@ def run_bot():
     logger.info("[3/8] Database: Connected (%s)", db_health["backend"])
 
     _ensure_agent_mode_column()
+    _ensure_position_tracking_columns()
 
     logger.info("[4/8] Starting schema verification...")
     try:
