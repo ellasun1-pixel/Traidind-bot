@@ -15,7 +15,7 @@ from src.scheduler.jobs import get_portfolio, get_last_signals, clear_last_signa
 from src.calendar.manager import get_calendar_manager, format_calendar_view
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session, AuditLog
-from src.database.models import Signal, Asset
+from src.database.models import Signal, Asset, PaperPosition
 from src.signals.lifecycle import SignalLifecycle
 from src.auth.owner import owner_only, validate_auth_config
 from src.auth.permissions import Permission, get_user_permissions
@@ -94,6 +94,24 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         active_mode = get_active_mode()
         mode_label = "LIVE" if active_mode == "LIVE_FUNDED" else "PAPER"
 
+        mem_open = len([p for p in portfolio.positions if p.status == "open"])
+
+        db_open_count = None
+        try:
+            with get_session() as session:
+                db_open_count = int(
+                    session.query(PaperPosition)
+                    .filter(PaperPosition.is_open.is_(True))
+                    .filter(PaperPosition.agent_mode == active_mode)
+                    .count()
+                )
+        except Exception:
+            pass
+
+        db_tag = ""
+        if isinstance(db_open_count, int) and db_open_count != mem_open:
+            db_tag = f" (DB: {db_open_count}!)"
+
         status_lines = [
             "\U0001f4ca *Status*",
             "",
@@ -102,7 +120,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Equity: ${equity:.2f}",
             f"Cash: ${portfolio.balance_usd:.2f}",
             f"Challenge: {portfolio.challenge_status.upper()}",
-            f"Open positions: {len([p for p in portfolio.positions if p.status == 'open'])}",
+            f"Open positions: {mem_open}{db_tag}",
             "",
         ]
 
