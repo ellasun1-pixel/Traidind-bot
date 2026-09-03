@@ -192,7 +192,7 @@ assets:
 settings:
   starting_balance: 10000.0
   win_level: 11200.0
-  loss_level: 9500.0
+  loss_level: 9700.0
   risk_per_trade_pct_min: 0.015
   risk_per_trade_pct_max: 0.022
   risk_per_trade_pct_default: 0.018
