@@ -29,6 +29,13 @@ from src.signals.lifecycle import InvalidTransitionError
 
 logger = logging.getLogger(__name__)
 
+_bot_start_time: datetime | None = None
+
+
+def _set_bot_start_time():
+    global _bot_start_time
+    _bot_start_time = datetime.now()
+
 
 def _esc(text: str) -> str:
     for ch in ("_", "*", "`", "["):
@@ -1258,6 +1265,18 @@ async def cmd_switch_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @owner_only
 async def cmd_sync_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        if _bot_start_time and update.message and update.message.date:
+            msg_age = (datetime.now(update.message.date.tzinfo or None) - update.message.date).total_seconds()
+            if msg_age > 120:
+                logger.warning(
+                    "STALE_COMMAND sync_portfolio: message is %.0fs old (sent during restart?), processing anyway",
+                    msg_age,
+                )
+                await update.message.reply_text(
+                    "This command was sent during a restart and may have been delayed. Processing now...",
+                    parse_mode=None,
+                )
+
         args = context.args or []
         if len(args) != 3:
             await update.message.reply_text(
@@ -1554,6 +1573,7 @@ def create_bot(token: str | None = None) -> Application:
         raise ValueError("TELEGRAM_BOT_TOKEN not set")
 
     validate_auth_config()
+    _set_bot_start_time()
 
     app = Application.builder().token(bot_token).build()
 

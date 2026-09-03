@@ -18,7 +18,7 @@ from src.portfolio.manager import PaperPortfolio
 from src.notifier.notification_logic import NotificationManager
 from src.notifier.formatter import SignalFormatter
 from src.database import get_session
-from src.database.models import Signal, Asset
+from src.database.models import Signal, Asset, PaperPosition
 from src.database.repository import (
     AssetRepository, SchedulerStateRepository, AuditLogRepository,
     PriceHistoryRepository, MarketDataMetaRepository, SignalRepository,
@@ -333,6 +333,7 @@ async def _process_single_asset(asset: AssetConfig, cycle_mode: str | None = Non
         active_mode=mode_for_cycle,
     )
     signal.provider = safety.provider_used
+    signal.active_mode = mode_for_cycle
 
     _last_signals[asset.symbol] = signal
     result["signal_type"] = signal.signal_type
@@ -457,6 +458,32 @@ async def market_check_job():
         return
 
     portfolio = get_portfolio()
+
+    mem_open = len([p for p in portfolio.positions if p.status == "open"])
+    try:
+        with get_session() as session:
+            db_open = (
+                session.query(PaperPosition)
+                .filter(PaperPosition.is_open.is_(True))
+                .filter(PaperPosition.agent_mode == cycle_mode)
+                .count()
+            )
+        if db_open > 0 and mem_open == 0:
+            logger.error(
+                "PORTFOLIO_DESYNC: DB has %d open positions for mode=%s but memory has 0. "
+                "Forcing portfolio reload from DB.",
+                db_open, cycle_mode,
+            )
+            if cycle_mode in _portfolios:
+                del _portfolios[cycle_mode]
+            portfolio = get_portfolio()
+            mem_open = len([p for p in portfolio.positions if p.status == "open"])
+            logger.warning(
+                "PORTFOLIO_RELOAD: after reload, memory has %d open positions", mem_open,
+            )
+    except Exception as e:
+        logger.warning("Portfolio integrity check failed: %s", e)
+
     if not portfolio.is_challenge_active:
         logger.info("Challenge is %s — skipping signal generation", portfolio.challenge_status)
         return

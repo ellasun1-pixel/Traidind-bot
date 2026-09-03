@@ -1320,10 +1320,17 @@ class TestMarketCheckActiveHours:
                     mock_tz = MagicMock()
                     mock_pytz.timezone.return_value = mock_tz
 
-                    with patch("src.scheduler.jobs.get_portfolio") as mock_gp:
+                    with patch("src.scheduler.jobs.get_portfolio") as mock_gp, \
+                         patch("src.scheduler.jobs.get_session") as mock_gs:
                         mock_portfolio = MagicMock()
                         mock_portfolio.is_challenge_active = False
+                        mock_portfolio.positions = []
                         mock_gp.return_value = mock_portfolio
+                        mock_session = MagicMock()
+                        mock_session.__enter__ = MagicMock(return_value=mock_session)
+                        mock_session.__exit__ = MagicMock(return_value=False)
+                        mock_session.query.return_value.filter.return_value.filter.return_value.count.return_value = 0
+                        mock_gs.return_value = mock_session
                         await market_check_job()
                         mock_gp.assert_called_once()
 

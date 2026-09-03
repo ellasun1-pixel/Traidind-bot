@@ -34,6 +34,7 @@ class TradeSignal:
     distance_to_win: float = 0.0
     distance_to_loss: float = 0.0
     provider: str = ""
+    active_mode: str = ""
     sell_pct: float = 0.0
     sell_quantity: float = 0.0
     keep_quantity: float = 0.0
@@ -377,6 +378,10 @@ class StrategyEngine:
             return None
 
         if existing:
+            logger.debug(
+                "BUY_BLOCKED_EXISTING_POSITION %s: already have %d open position(s)",
+                symbol, len(existing),
+            )
             return None
 
         commission_spread = settings.commission_pct + settings.spread_pct
