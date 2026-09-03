@@ -694,19 +694,33 @@ class PaperPortfolio:
                             len(closed_any),
                         )
 
-                latest_snap = (
-                    session.query(PortfolioSnapshot)
-                    .filter(PortfolioSnapshot.agent_mode == mode)
-                    .order_by(PortfolioSnapshot.created_at.desc())
-                    .first()
-                )
+                latest_snap = None
+                try:
+                    latest_snap = (
+                        session.query(PortfolioSnapshot)
+                        .filter(PortfolioSnapshot.agent_mode == mode)
+                        .order_by(PortfolioSnapshot.created_at.desc())
+                        .first()
+                    )
+                except Exception as snap_err:
+                    logger.warning(
+                        "RESTORE: portfolio_snapshots query failed (missing column?): %s",
+                        snap_err,
+                    )
+                    session.rollback()
 
-                acct_repo = PaperAccountRepository(session)
-                account = (
-                    session.query(PaperAccount)
-                    .filter(PaperAccount.agent_mode == mode)
-                    .first()
-                )
+                account = None
+                try:
+                    account = (
+                        session.query(PaperAccount)
+                        .filter(PaperAccount.agent_mode == mode)
+                        .first()
+                    )
+                except Exception as acct_err:
+                    logger.warning(
+                        "RESTORE: paper_account query failed: %s", acct_err,
+                    )
+                    session.rollback()
 
                 if not open_positions and not closed_positions:
                     if account is not None:
