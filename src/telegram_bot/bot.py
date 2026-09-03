@@ -192,6 +192,12 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         portfolio = get_portfolio()
         prices = await get_live_prices()
+        open_count = len([p for p in portfolio.positions if p.status == "open"])
+        logger.warning(
+            "CMD_PORTFOLIO: mode=%s balance=$%.2f positions=%d peak=$%.2f status=%s id=%s",
+            portfolio.mode, portfolio.balance_usd, open_count,
+            portfolio.peak_balance, portfolio.challenge_status, id(portfolio),
+        )
         summary = portfolio.get_portfolio_summary(prices)
         text = formatter.format_portfolio_summary(summary)
         await update.message.reply_text(text, parse_mode="Markdown")
@@ -1343,6 +1349,11 @@ async def cmd_sync_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE)
         current_price = prices[symbol]
         stop_loss_pct = float(asset_cfg.stop_loss_pct) if hasattr(asset_cfg, "stop_loss_pct") else 0.03
         portfolio = get_portfolio()
+        logger.warning(
+            "CMD_SYNC_PORTFOLIO: mode=%s portfolio_id=%s before sync: balance=$%.2f positions=%d",
+            portfolio.mode, id(portfolio), portfolio.balance_usd,
+            len([p for p in portfolio.positions if p.status == "open"]),
+        )
         result = portfolio.sync_portfolio(
             symbol=symbol,
             quantity=quantity,
@@ -1352,6 +1363,12 @@ async def cmd_sync_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
         equity = portfolio.get_total_equity(prices)
+        logger.warning(
+            "CMD_SYNC_PORTFOLIO: after sync: balance=$%.2f equity=$%.2f positions=%d portfolio_id=%s",
+            portfolio.balance_usd, equity,
+            len([p for p in portfolio.positions if p.status == "open"]),
+            id(portfolio),
+        )
         record_portfolio_snapshot("sync_portfolio", prices)
 
         await update.message.reply_text(
