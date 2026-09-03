@@ -194,10 +194,18 @@ async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prices = await get_live_prices()
         open_count = len([p for p in portfolio.positions if p.status == "open"])
         logger.warning(
-            "CMD_PORTFOLIO: mode=%s balance=$%.2f positions=%d peak=$%.2f status=%s id=%s",
+            "CMD_PORTFOLIO: mode=%s balance=$%.2f positions=%d peak=$%.2f status=%s fallback=%s id=%s",
             portfolio.mode, portfolio.balance_usd, open_count,
-            portfolio.peak_balance, portfolio.challenge_status, id(portfolio),
+            portfolio.peak_balance, portfolio.challenge_status,
+            getattr(portfolio, "_is_fallback", False), id(portfolio),
         )
+        if getattr(portfolio, "_is_fallback", False):
+            await update.message.reply_text(
+                "Portfolio data temporarily unavailable (DB schema error). "
+                "The bot is retrying automatically — please try /portfolio again in a minute.",
+                parse_mode=None,
+            )
+            return
         summary = portfolio.get_portfolio_summary(prices)
         text = formatter.format_portfolio_summary(summary)
         await update.message.reply_text(text, parse_mode="Markdown")

@@ -71,91 +71,123 @@ def _handle_sigterm(signum, frame):
     sys.exit(0)
 
 
-def _ensure_agent_mode_column():
-    """Ensure 'mode' column is renamed to 'agent_mode' on both tables.
+def _ensure_schema_columns():
+    """Ensure every column the ORM expects actually exists in the DB.
 
-    Runs before ORM init so queries don't fail with UndefinedColumn.
-    Idempotent — safe to run on every startup.
+    Alembic migrations sometimes advance alembic_version without the
+    ALTER TABLE actually succeeding, leaving the DB schema behind the
+    code.  This function compares every model's columns against the
+    real DB and adds anything missing.  Runs before ORM init, idempotent.
     """
     from sqlalchemy import create_engine, text, inspect as sa_inspect
+
     db_url = os.environ.get("DATABASE_URL", "")
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     if not db_url:
-        logger.warning("DATABASE_URL not set, skipping column check")
+        logger.warning("DATABASE_URL not set, skipping schema guard")
         return
+
+    EXPECTED_COLUMNS: dict[str, dict[str, str]] = {
+        "paper_account": {
+            "agent_mode": "VARCHAR(20) NOT NULL DEFAULT 'PAPER_CHALLENGE'",
+            "balance_usd": "NUMERIC(12,2) NOT NULL DEFAULT 10000.00",
+            "peak_balance": "NUMERIC(12,2) NOT NULL DEFAULT 10000.00",
+            "starting_balance": "NUMERIC(12,2) NOT NULL DEFAULT 10000.00",
+            "realized_pnl": "NUMERIC(12,2) NOT NULL DEFAULT 0.00",
+            "daily_loss": "NUMERIC(12,2) NOT NULL DEFAULT 0.00",
+            "daily_loss_date": "DATE NOT NULL DEFAULT CURRENT_DATE",
+            "challenge_status": "VARCHAR(10) NOT NULL DEFAULT 'active'",
+            "strategy_version": "VARCHAR(20) NOT NULL DEFAULT '1.0'",
+            "updated_at": "TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+        },
+        "paper_positions": {
+            "agent_mode": "VARCHAR(20) NOT NULL DEFAULT 'PAPER_CHALLENGE'",
+            "peak_price": "NUMERIC(18,8)",
+            "tp1_fired": "BOOLEAN NOT NULL DEFAULT false",
+            "tp2_fired": "BOOLEAN NOT NULL DEFAULT false",
+            "signal_id": "VARCHAR(36)",
+            "take_profit": "NUMERIC(18,8)",
+            "close_reason": "VARCHAR(20)",
+        },
+        "portfolio_snapshots": {
+            "agent_mode": "VARCHAR(20)",
+        },
+        "daily_snapshots": {
+            "agent_mode": "VARCHAR(20) NOT NULL DEFAULT 'PAPER_CHALLENGE'",
+            "peak_balance": "NUMERIC(12,2) NOT NULL DEFAULT 10000.00",
+            "strategy_version": "VARCHAR(20) NOT NULL DEFAULT '1.0'",
+        },
+        "signals": {
+            "price_range_low": "NUMERIC(18,8)",
+            "price_range_high": "NUMERIC(18,8)",
+            "price_tolerance_pct": "NUMERIC(6,4) DEFAULT 0.02",
+            "superseded_at": "TIMESTAMPTZ",
+            "superseded_reason": "TEXT",
+            "previous_signal_id": "VARCHAR(36)",
+        },
+        "scheduler_state": {
+            "success_count": "INTEGER NOT NULL DEFAULT 0",
+            "failure_count": "INTEGER NOT NULL DEFAULT 0",
+            "last_duration_ms": "INTEGER",
+            "last_completed_at": "TIMESTAMPTZ",
+            "last_started_at": "TIMESTAMPTZ",
+        },
+        "market_data_meta": {
+            "valid_candle_count": "INTEGER",
+            "validation_error": "TEXT",
+        },
+        "health_transitions": {
+            "recovered_at": "TIMESTAMPTZ",
+            "recovery_seconds": "INTEGER",
+        },
+    }
+
+    RENAME_COLUMNS: dict[str, dict[str, str]] = {
+        "paper_account": {"mode": "agent_mode"},
+        "paper_positions": {"mode": "agent_mode"},
+    }
+
     engine = create_engine(db_url)
-    with engine.connect() as conn:
-        insp = sa_inspect(conn)
-        for table in ("paper_account", "paper_positions"):
-            try:
-                col_names = [c["name"] for c in insp.get_columns(table)]
-            except Exception:
-                logger.info("COLUMN_CHECK %s: table not found, skipping", table)
-                continue
-
-            has_mode = "mode" in col_names
-            has_agent_mode = "agent_mode" in col_names
-            logger.info("COLUMN_CHECK %s: mode=%s, agent_mode=%s", table, has_mode, has_agent_mode)
-
-            if has_agent_mode:
-                logger.info("COLUMN_CHECK %s: agent_mode exists, OK", table)
-            elif has_mode:
-                logger.info("COLUMN_CHECK %s: renaming mode -> agent_mode", table)
-                conn.execute(text(
-                    f'ALTER TABLE {table} RENAME COLUMN "mode" TO agent_mode'
-                ))
-                conn.commit()
-                logger.info("COLUMN_CHECK %s: rename DONE", table)
-            else:
-                logger.info("COLUMN_CHECK %s: adding agent_mode column", table)
-                conn.execute(text(
-                    f"ALTER TABLE {table} ADD COLUMN agent_mode VARCHAR(20) "
-                    f"NOT NULL DEFAULT 'PAPER_CHALLENGE'"
-                ))
-                conn.commit()
-                logger.info("COLUMN_CHECK %s: added agent_mode DONE", table)
-    engine.dispose()
-
-
-def _ensure_position_tracking_columns():
-    """Ensure peak_price, tp1_fired, tp2_fired exist on paper_positions.
-
-    Migration 013 adds these, but if alembic_version advanced without the
-    columns actually being created, every query on paper_positions crashes
-    with UndefinedColumn.  This runs before ORM init and is idempotent.
-    """
-    from sqlalchemy import create_engine, text, inspect as sa_inspect
-    db_url = os.environ.get("DATABASE_URL", "")
-    if db_url.startswith("postgres://"):
-        db_url = db_url.replace("postgres://", "postgresql://", 1)
-    if not db_url:
-        return
-    engine = create_engine(db_url)
+    added_count = 0
     try:
         with engine.connect() as conn:
             insp = sa_inspect(conn)
-            try:
-                col_names = [c["name"] for c in insp.get_columns("paper_positions")]
-            except Exception:
-                logger.info("COLUMN_CHECK paper_positions: table not found, skipping")
-                return
+            existing_tables = set(insp.get_table_names())
 
-            required = {
-                "peak_price": "NUMERIC(18,8)",
-                "tp1_fired": "BOOLEAN NOT NULL DEFAULT false",
-                "tp2_fired": "BOOLEAN NOT NULL DEFAULT false",
-            }
-            for col, col_def in required.items():
-                if col not in col_names:
-                    logger.warning("COLUMN_CHECK paper_positions: adding missing column %s", col)
-                    conn.execute(text(
-                        f"ALTER TABLE paper_positions ADD COLUMN {col} {col_def}"
-                    ))
-                    conn.commit()
-                    logger.info("COLUMN_CHECK paper_positions: %s added", col)
-                else:
-                    logger.info("COLUMN_CHECK paper_positions: %s exists, OK", col)
+            for table, columns in EXPECTED_COLUMNS.items():
+                if table not in existing_tables:
+                    logger.info("SCHEMA_GUARD %s: table not found, will be created by init_db", table)
+                    continue
+
+                col_names = {c["name"] for c in insp.get_columns(table)}
+
+                renames = RENAME_COLUMNS.get(table, {})
+                for old_name, new_name in renames.items():
+                    if old_name in col_names and new_name not in col_names:
+                        logger.warning("SCHEMA_GUARD %s: renaming %s -> %s", table, old_name, new_name)
+                        conn.execute(text(
+                            f'ALTER TABLE {table} RENAME COLUMN "{old_name}" TO {new_name}'
+                        ))
+                        conn.commit()
+                        col_names.discard(old_name)
+                        col_names.add(new_name)
+
+                for col, col_def in columns.items():
+                    if col not in col_names:
+                        logger.warning("SCHEMA_GUARD %s: adding missing column %s", table, col)
+                        conn.execute(text(
+                            f"ALTER TABLE {table} ADD COLUMN {col} {col_def}"
+                        ))
+                        conn.commit()
+                        added_count += 1
+
+            if added_count:
+                logger.warning("SCHEMA_GUARD: added %d missing columns total", added_count)
+            else:
+                logger.info("SCHEMA_GUARD: all expected columns present")
+    except Exception as e:
+        logger.error("SCHEMA_GUARD failed: %s", e, exc_info=True)
     finally:
         engine.dispose()
 
@@ -189,8 +221,7 @@ def run_bot():
         sys.exit(1)
     logger.info("[3/8] Database: Connected (%s)", db_health["backend"])
 
-    _ensure_agent_mode_column()
-    _ensure_position_tracking_columns()
+    _ensure_schema_columns()
 
     logger.info("[4/8] Starting schema verification...")
     try:
