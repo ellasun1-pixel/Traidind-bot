@@ -142,7 +142,7 @@ class TestStrategyEngine:
 class TestMomentumFilter:
     """Tests for the short-term momentum filter on BUY signals."""
 
-    def test_block_buy_on_severe_1d_drop(self):
+    def test_block_buy_on_severe_1d_candle_drop(self):
         engine = StrategyEngine()
         row = pd.Series({
             "price_change_short": -0.05,
@@ -164,38 +164,78 @@ class TestMomentumFilter:
         result = engine._check_momentum(row, 100)
         assert result == "BLOCK"
 
-    def test_warn_on_moderate_1d_drop(self):
+    def test_block_buy_on_severe_intraday_drop(self):
+        """Live price 5% below last close — block even if daily candles look fine."""
+        engine = StrategyEngine()
+        row = pd.Series({
+            "price_change_short": 0.01,
+            "price_change_3d": 0.02,
+            "close": 100,
+            "ema5": 99,
+        })
+        result = engine._check_momentum(row, 95)
+        assert result == "BLOCK"
+
+    def test_warn_on_moderate_intraday_drop(self):
+        """Live price 2% below last close — warn but allow."""
+        engine = StrategyEngine()
+        row = pd.Series({
+            "price_change_short": 0.005,
+            "price_change_3d": 0.01,
+            "close": 100,
+            "ema5": 99,
+        })
+        result = engine._check_momentum(row, 98)
+        assert result is not None
+        assert result != "BLOCK"
+        assert "live price" in result
+        assert "below last close" in result
+
+    def test_warn_on_moderate_candle_drop(self):
         engine = StrategyEngine()
         row = pd.Series({
             "price_change_short": -0.025,
             "price_change_3d": -0.01,
             "close": 100,
-            "ema5": 101,
+            "ema5": 99,
         })
         result = engine._check_momentum(row, 100)
         assert result is not None
         assert result != "BLOCK"
         assert "fell" in result
 
-    def test_warn_when_below_ema5(self):
+    def test_warn_when_live_price_below_ema5(self):
+        """EMA5 check uses live price, not last close."""
         engine = StrategyEngine()
         row = pd.Series({
             "price_change_short": -0.005,
             "price_change_3d": -0.01,
-            "close": 98,
+            "close": 101,
             "ema5": 100,
         })
-        result = engine._check_momentum(row, 98)
+        result = engine._check_momentum(row, 99)
         assert result is not None
         assert result != "BLOCK"
         assert "5-day EMA" in result
+
+    def test_no_warning_when_live_price_above_ema5(self):
+        """close < ema5 but live price > ema5 — no warning."""
+        engine = StrategyEngine()
+        row = pd.Series({
+            "price_change_short": -0.005,
+            "price_change_3d": -0.01,
+            "close": 99,
+            "ema5": 100,
+        })
+        result = engine._check_momentum(row, 101)
+        assert result is None
 
     def test_no_warning_when_momentum_positive(self):
         engine = StrategyEngine()
         row = pd.Series({
             "price_change_short": 0.01,
             "price_change_3d": 0.03,
-            "close": 105,
+            "close": 100,
             "ema5": 102,
         })
         result = engine._check_momentum(row, 105)
@@ -206,35 +246,38 @@ class TestMomentumFilter:
         row = pd.Series({
             "price_change_short": -0.005,
             "price_change_3d": -0.01,
-            "close": 101,
-            "ema5": 100,
+            "close": 100,
+            "ema5": 99,
         })
-        result = engine._check_momentum(row, 101)
+        result = engine._check_momentum(row, 100.5)
         assert result is None
 
-    def test_warn_combines_multiple_signals(self):
+    def test_warn_combines_intraday_candle_and_ema(self):
+        """All three warning sources fire together."""
         engine = StrategyEngine()
         row = pd.Series({
             "price_change_short": -0.025,
             "price_change_3d": -0.05,
-            "close": 95,
-            "ema5": 100,
+            "close": 100,
+            "ema5": 99,
         })
-        result = engine._check_momentum(row, 95)
+        result = engine._check_momentum(row, 97)
         assert result is not None
         assert result != "BLOCK"
-        assert "today" in result
+        assert "live price" in result
         assert "3 days" in result
         assert "5-day EMA" in result
 
-    def test_momentum_warning_downgrades_buy_priority(self):
-        """BUY with momentum warning should be MEDIUM priority, not HIGH."""
+    def test_intraday_drop_detected_even_with_green_candles(self):
+        """The key scenario: daily candles are green but price is falling NOW."""
         engine = StrategyEngine()
         row = pd.Series({
-            "price_change_short": -0.025,
-            "price_change_3d": -0.01,
+            "price_change_short": 0.02,
+            "price_change_3d": 0.05,
             "close": 100,
-            "ema5": 101,
+            "ema5": 98,
         })
-        warning = engine._check_momentum(row, 100)
-        assert warning is not None and warning != "BLOCK"
+        result = engine._check_momentum(row, 97.5)
+        assert result is not None
+        assert result != "BLOCK"
+        assert "live price" in result
