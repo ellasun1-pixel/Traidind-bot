@@ -66,6 +66,10 @@ def get_portfolio(mode: str | None = None) -> PaperPortfolio:
         _ensure_mode_restored()
     m = mode or _active_mode
     if m not in _portfolios:
+        logger.warning(
+            "PORTFOLIO_CACHE_MISS mode=%s active_mode=%s cached_modes=%s — restoring from DB",
+            m, _active_mode, list(_portfolios.keys()),
+        )
         restored = PaperPortfolio.restore_from_db(mode=m)
         if getattr(restored, "_is_fallback", False):
             logger.warning(

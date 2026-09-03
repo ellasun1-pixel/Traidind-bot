@@ -709,12 +709,27 @@ class PaperPortfolio:
                 )
 
                 if not open_positions and not closed_positions:
-                    if latest_snap and float(latest_snap.cash_usd) != settings.starting_balance:
-                        logger.info(
-                            "DB has snapshot (equity=$%.2f) but no positions — "
-                            "starting fresh at $%.2f",
-                            float(latest_snap.equity_usd), settings.starting_balance,
+                    if account is not None:
+                        stored_bal = float(account.balance_usd)
+                        stored_peak = float(account.peak_balance or settings.starting_balance)
+                        stored_status = getattr(account, "challenge_status", "active")
+                        logger.warning(
+                            "RESTORE_EARLY_RETURN: no positions but paper_account exists "
+                            "(balance=$%.2f peak=$%.2f status=%s) — using stored balance",
+                            stored_bal, stored_peak, stored_status,
                         )
+                        portfolio.balance_usd = stored_bal
+                        portfolio.realized_pnl_total = float(account.realized_pnl or 0)
+                        portfolio.peak_balance = max(stored_peak, stored_bal, settings.starting_balance)
+                        if stored_status in ("active", "won", "lost"):
+                            portfolio.challenge_status = stored_status
+                    else:
+                        logger.warning(
+                            "RESTORE_EARLY_RETURN: no positions and no paper_account — "
+                            "starting fresh at $%.2f",
+                            settings.starting_balance,
+                        )
+                    portfolio._sync_account_table()
                     return portfolio
 
                 real_closed = [
