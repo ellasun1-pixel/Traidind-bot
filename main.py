@@ -182,6 +182,37 @@ def _ensure_schema_columns():
                         conn.commit()
                         added_count += 1
 
+            # --- Index guard: replace uq_one_open_per_asset with mode-aware version ---
+            if "paper_positions" in existing_tables:
+                idx_rows = conn.execute(text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE tablename = 'paper_positions' AND indexname IN "
+                    "('uq_one_open_per_asset', 'uq_one_open_per_asset_mode')"
+                )).fetchall()
+                idx_names = {r[0] for r in idx_rows}
+
+                if "uq_one_open_per_asset" in idx_names and "uq_one_open_per_asset_mode" not in idx_names:
+                    logger.warning("SCHEMA_GUARD: replacing uq_one_open_per_asset with mode-aware version")
+                    conn.execute(text("DROP INDEX IF EXISTS uq_one_open_per_asset"))
+                    conn.execute(text(
+                        "CREATE UNIQUE INDEX uq_one_open_per_asset_mode "
+                        "ON paper_positions (asset_id, agent_mode) "
+                        "WHERE is_open = true"
+                    ))
+                    conn.commit()
+                    logger.warning("SCHEMA_GUARD: uq_one_open_per_asset_mode created")
+                elif "uq_one_open_per_asset" not in idx_names and "uq_one_open_per_asset_mode" not in idx_names:
+                    logger.warning("SCHEMA_GUARD: creating missing uq_one_open_per_asset_mode")
+                    conn.execute(text(
+                        "CREATE UNIQUE INDEX uq_one_open_per_asset_mode "
+                        "ON paper_positions (asset_id, agent_mode) "
+                        "WHERE is_open = true"
+                    ))
+                    conn.commit()
+                    logger.warning("SCHEMA_GUARD: uq_one_open_per_asset_mode created")
+                else:
+                    logger.info("SCHEMA_GUARD: uq_one_open_per_asset_mode already present")
+
             if added_count:
                 logger.warning("SCHEMA_GUARD: added %d missing columns total", added_count)
             else:
