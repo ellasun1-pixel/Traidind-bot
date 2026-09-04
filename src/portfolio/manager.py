@@ -227,7 +227,7 @@ class PaperPortfolio:
             try:
                 self._persist_sell(pos, signal_id)
             except Exception as e:
-                logger.error("Failed to persist SELL to DB: %s", e)
+                logger.error("Failed to persist SELL to DB: %s", e, exc_info=True)
 
         self._update_challenge_status(prices or {})
         return True, f"Sold {symbol} @ ${exit_price:.2f}, P&L: ${total_pnl:.2f}"
@@ -950,13 +950,19 @@ class PaperPortfolio:
                 open_db = (
                     session.query(PaperPosition)
                     .filter(PaperPosition.is_open.is_(True))
-                    .filter(PaperPosition.agent_mode == self.mode)
                     .all()
                 )
                 repo = PositionRepository(session)
                 closed_count = len(open_db)
                 for db_pos in open_db:
-                    repo.close(db_pos, float(db_pos.entry_price), 0.0, "sync_replaced")
+                    reason = "sync_replaced"
+                    if db_pos.agent_mode != self.mode:
+                        reason = "sync_cross_mode"
+                        logger.warning(
+                            "SYNC_DB: closing cross-mode position id=%s mode=%s (current=%s)",
+                            db_pos.id, db_pos.agent_mode, self.mode,
+                        )
+                    repo.close(db_pos, float(db_pos.entry_price), 0.0, reason)
                 session.flush()
 
                 if quantity > 0:
